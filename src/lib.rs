@@ -1,7 +1,15 @@
-use std::{any::Any, collections::HashMap, path::{Path, PathBuf}, sync::{mpsc, Mutex, OnceLock}, thread};
+use std::{
+    any::Any,
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock, mpsc},
+    thread,
+};
 
-use anyhow::{anyhow, Result};
-use wasmtime::{component::bindgen, component::Component, component::Linker, Config, Engine, Store};
+use anyhow::{Result, anyhow};
+use wasmtime::{
+    Config, Engine, Store, component::Component, component::Linker, component::bindgen,
+};
 use wasmtime_wasi::WasiCtxBuilder;
 
 pub mod api;
@@ -61,7 +69,9 @@ where
     let name = plugin_name.into();
 
     {
-        let map = registry().lock().map_err(|_| anyhow!("plugin registry poisoned"))?;
+        let map = registry()
+            .lock()
+            .map_err(|_| anyhow!("plugin registry poisoned"))?;
         if map.contains_key(&name) {
             return Err(anyhow!("plugin `{}` already initialized", name));
         }
@@ -76,7 +86,8 @@ where
     thread::Builder::new()
         .name(format!("plugin-{}", worker_name))
         .spawn(move || {
-            if let Err(err) = plugin_worker_main(worker_name, configure, command_rx, init_tx_worker) {
+            if let Err(err) = plugin_worker_main(worker_name, configure, command_rx, init_tx_worker)
+            {
                 let _ = init_tx_error.send(Err(err));
             }
         })
@@ -89,8 +100,13 @@ where
         .map_err(|_| anyhow!("plugin `{}` worker terminated during initialization", name))?;
     init_result?;
 
-    let mut map = registry().lock().map_err(|_| anyhow!("plugin registry poisoned"))?;
-    if map.insert(name.clone(), PluginHandle { sender: command_tx }).is_some() {
+    let mut map = registry()
+        .lock()
+        .map_err(|_| anyhow!("plugin registry poisoned"))?;
+    if map
+        .insert(name.clone(), PluginHandle { sender: command_tx })
+        .is_some()
+    {
         return Err(anyhow!("plugin `{}` already initialized", name));
     }
 
@@ -99,7 +115,9 @@ where
 
 pub fn load_wasm(plugin_name: &str, wasm_path: impl AsRef<Path>) -> Result<()> {
     let handle = {
-        let map = registry().lock().map_err(|_| anyhow!("plugin registry poisoned"))?;
+        let map = registry()
+            .lock()
+            .map_err(|_| anyhow!("plugin registry poisoned"))?;
         map.get(plugin_name)
             .cloned()
             .ok_or_else(|| anyhow!("plugin `{}` not found", plugin_name))?
@@ -126,7 +144,9 @@ where
     R: Send + 'static,
 {
     let handle = {
-        let map = registry().lock().map_err(|_| anyhow!("plugin registry poisoned"))?;
+        let map = registry()
+            .lock()
+            .map_err(|_| anyhow!("plugin registry poisoned"))?;
         map.get(plugin_name)
             .cloned()
             .ok_or_else(|| anyhow!("plugin `{}` not found", plugin_name))?
@@ -173,9 +193,12 @@ where
 
     let mut instance: Option<PsysWorld> = None;
 
-    init_tx
-        .send(Ok(()))
-        .map_err(|_| anyhow!("plugin `{}` initialization acknowledgement failed", plugin_name))?;
+    init_tx.send(Ok(())).map_err(|_| {
+        anyhow!(
+            "plugin `{}` initialization acknowledgement failed",
+            plugin_name
+        )
+    })?;
 
     drop(init_tx);
 
@@ -192,9 +215,9 @@ where
             }
             PluginCommand::Invoke { action, responder } => {
                 let result = (|| -> Result<Box<dyn Any + Send>> {
-                    let instance_ref = instance
-                        .as_ref()
-                        .ok_or_else(|| anyhow!("plugin `{}` has not loaded any component", plugin_name))?;
+                    let instance_ref = instance.as_ref().ok_or_else(|| {
+                        anyhow!("plugin `{}` has not loaded any component", plugin_name)
+                    })?;
                     action(&mut store, instance_ref)
                 })();
                 let _ = responder.send(result);
