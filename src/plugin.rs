@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use crate::manifest::PluginManifest;
 
@@ -67,5 +67,4 @@ impl Plugin {
         self.runtime = None;
         self.state.disabled = true;
     }
-
 }

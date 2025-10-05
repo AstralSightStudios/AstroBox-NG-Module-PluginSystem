@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use crossbeam_channel as channel;
 use manager::PluginManager;
 use once_cell::sync::OnceCell;
@@ -23,7 +23,10 @@ pub fn init(dir: PathBuf) -> Result<()> {
     let (tx, rx) = channel::unbounded::<Command>();
 
     std::thread::spawn(move || {
-        let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        let runtime = match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+        {
             Ok(rt) => rt,
             Err(e) => {
                 log::error!("Failed to build runtime: {e}");
@@ -75,7 +78,8 @@ where
         PM_IN_THREAD.with(|cell| {
             let pm_ptr = cell
                 .borrow()
-                .ok_or_else(|| anyhow!("PluginManager TLS not set"))? as *mut PluginManager;
+                .ok_or_else(|| anyhow!("PluginManager TLS not set"))?
+                as *mut PluginManager;
             Ok(f(&mut *pm_ptr))
         })
     }
@@ -101,5 +105,6 @@ where
         .send(cmd)
         .map_err(|e| anyhow!("Plugin thread unexpectedly closed. error={}", e.to_string()))?;
 
-    rx.await.map_err(|_| anyhow!("Plugin thread dropped the response"))
+    rx.await
+        .map_err(|_| anyhow!("Plugin thread dropped the response"))
 }
