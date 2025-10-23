@@ -5,6 +5,20 @@ use once_cell::sync::OnceCell;
 use std::{cell::RefCell, path::PathBuf, thread};
 use tokio::sync::oneshot;
 
+pub mod api;
+pub mod bindings {
+    wasmtime::component::bindgen!({
+        path: "wit",
+        world: "psys-world",
+        imports: {
+            "astrobox:psys-host/debug/send-raw": async | store,
+            "astrobox:psys-host/device/disconnect-device": async | store,
+            "astrobox:psys-host/interconnect/send-qaic-message": async | store,
+            "astrobox:psys-host/thirdpartyapp/launch-qa": async | store,
+            "astrobox:psys-host/thirdpartyapp/get-thirdparty-app-list": async | store,
+        },
+    });
+}
 pub mod manager;
 pub mod manifest;
 pub mod plugin;

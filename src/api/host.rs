@@ -1,6 +1,9 @@
-use crate::astrobox::psys_host;
-use wasmtime::component::ResourceTable;
+use crate::bindings::astrobox::psys_host;
+use anyhow::Error;
+use wasmtime::component::{Accessor, FutureReader, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
+
+type HostVec<T> = wasmtime::component::__internal::Vec<T>;
 
 pub struct PluginCtx {
     table: ResourceTable,
@@ -14,18 +17,6 @@ impl PluginCtx {
             wasi_ctx,
         }
     }
-
-    pub fn table(&mut self) -> &mut ResourceTable {
-        &mut self.table
-    }
-
-    pub fn wasi_ctx(&mut self) -> &mut WasiCtx {
-        &mut self.wasi_ctx
-    }
-}
-
-impl wasmtime::component::HasData for PluginCtx {
-    type Data<'a> = &'a mut PluginCtx;
 }
 
 impl WasiView for PluginCtx {
@@ -37,24 +28,23 @@ impl WasiView for PluginCtx {
     }
 }
 
+impl wasmtime::component::HasData for PluginCtx {
+    type Data<'a> = &'a mut PluginCtx;
+}
+
 impl psys_host::config::Host for PluginCtx {
-    fn read(
-        &mut self,
-    ) -> wasmtime::component::__internal::Vec<(
-        wasmtime::component::__internal::String,
-        wasmtime::component::__internal::String,
-    )> {
-        todo!()
+    fn read(&mut self) -> HostVec<(wasmtime::component::__internal::String, wasmtime::component::__internal::String)>
+    {
+        HostVec::new()
     }
 
     fn write(
         &mut self,
-        content: wasmtime::component::__internal::Vec<(
+        _content: HostVec<(
             wasmtime::component::__internal::String,
             wasmtime::component::__internal::String,
         )>,
-    ) -> () {
-        todo!()
+    ) {
     }
 }
 
@@ -62,43 +52,49 @@ impl psys_host::debug::Host for PluginCtx {}
 
 impl psys_host::debug::HostWithStore for PluginCtx {
     fn send_raw<T>(
-        _accessor: &wasmtime::component::Accessor<T, Self>,
-        _data: wasmtime::component::__internal::Vec<u8>,
-    ) -> impl core::future::Future<Output = ()> + Send {
-        async move { todo!() }
+        accessor: &Accessor<T, Self>,
+        data: HostVec<u8>,
+    ) -> impl core::future::Future<Output = FutureReader<()>> + Send {
+        let instance = accessor.instance();
+        let future = accessor.with(|mut access| {
+            FutureReader::new(instance, &mut access, async move {
+                let _ = data;
+                Ok::<(), Error>(())
+            })
+        });
+        async move { future }
     }
 }
 
 impl psys_host::device::Host for PluginCtx {
-    fn get_device_list(
-        &mut self,
-    ) -> wasmtime::component::__internal::Vec<psys_host::device::DeviceInfo> {
-        todo!()
+    fn get_device_list(&mut self) -> HostVec<psys_host::device::DeviceInfo> {
+        HostVec::new()
     }
 
-    fn get_connected_device_list(
-        &mut self,
-    ) -> wasmtime::component::__internal::Vec<psys_host::device::DeviceInfo> {
-        todo!()
+    fn get_connected_device_list(&mut self) -> HostVec<psys_host::device::DeviceInfo> {
+        HostVec::new()
     }
 }
 
 impl psys_host::device::HostWithStore for PluginCtx {
     fn disconnect_device<T>(
-        _accessor: &wasmtime::component::Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         _device: psys_host::device::DeviceInfo,
-    ) -> impl core::future::Future<Output = ()> + Send {
-        async move { todo!() }
+    ) -> impl core::future::Future<Output = FutureReader<()>> + Send {
+        let instance = accessor.instance();
+        let future = accessor.with(|mut access| {
+            FutureReader::new(instance, &mut access, async move { Ok::<(), Error>(()) })
+        });
+        async move { future }
     }
 }
 
 impl psys_host::event::Host for PluginCtx {
     fn send_event(
         &mut self,
-        event_name: wasmtime::component::__internal::String,
-        payload: wasmtime::component::__internal::String,
-    ) -> () {
-        todo!()
+        _event_name: wasmtime::component::__internal::String,
+        _payload: wasmtime::component::__internal::String,
+    ) {
     }
 }
 
@@ -106,21 +102,24 @@ impl psys_host::interconnect::Host for PluginCtx {}
 
 impl psys_host::interconnect::HostWithStore for PluginCtx {
     fn send_qaic_message<T>(
-        _accessor: &wasmtime::component::Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         _pkg_name: wasmtime::component::__internal::String,
         _data: wasmtime::component::__internal::String,
-    ) -> impl core::future::Future<Output = ()> + Send {
-        async move { todo!() }
+    ) -> impl core::future::Future<Output = FutureReader<()>> + Send {
+        let instance = accessor.instance();
+        let future = accessor.with(|mut access| {
+            FutureReader::new(instance, &mut access, async move { Ok::<(), Error>(()) })
+        });
+        async move { future }
     }
 }
 
 impl psys_host::queue::Host for PluginCtx {
     fn add_resource_to_queue(
         &mut self,
-        res_type: psys_host::queue::ResourceType,
-        file_path: wasmtime::component::__internal::String,
-    ) -> () {
-        todo!()
+        _res_type: psys_host::queue::ResourceType,
+        _file_path: wasmtime::component::__internal::String,
+    ) {
     }
 }
 
@@ -128,18 +127,28 @@ impl psys_host::thirdpartyapp::Host for PluginCtx {}
 
 impl psys_host::thirdpartyapp::HostWithStore for PluginCtx {
     fn launch_qa<T>(
-        _accessor: &wasmtime::component::Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         _app_info: psys_host::thirdpartyapp::AppInfo,
         _page_name: wasmtime::component::__internal::String,
-    ) -> impl core::future::Future<Output = ()> + Send {
-        async move { todo!() }
+    ) -> impl core::future::Future<Output = FutureReader<()>> + Send {
+        let instance = accessor.instance();
+        let future = accessor.with(|mut access| {
+            FutureReader::new(instance, &mut access, async move { Ok::<(), Error>(()) })
+        });
+        async move { future }
     }
 
     fn get_thirdparty_app_list<T>(
-        _accessor: &wasmtime::component::Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
     ) -> impl core::future::Future<
-        Output = wasmtime::component::__internal::Vec<psys_host::thirdpartyapp::AppInfo>,
+        Output = FutureReader<HostVec<psys_host::thirdpartyapp::AppInfo>>,
     > + Send {
-        async move { todo!() }
+        let instance = accessor.instance();
+        let future = accessor.with(|mut access| {
+            FutureReader::new(instance, &mut access, async move {
+                Ok::<HostVec<psys_host::thirdpartyapp::AppInfo>, Error>(HostVec::new())
+            })
+        });
+        async move { future }
     }
 }
