@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Cursor;
@@ -156,7 +156,7 @@ impl PluginManager {
             f(&mut plugin.data);
             Ok(())
         } else {
-            Err(anyhow!("Plugin '{}' not found", name))
+            Err(corelib::anyhow_site!("Plugin '{}' not found", name))
         }
     }
 

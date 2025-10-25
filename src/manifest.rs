@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,7 +35,7 @@ impl PluginManifest {
             )
         })?;
         if manifest.name.trim().is_empty() {
-            return Err(anyhow!(
+            return Err(corelib::anyhow_site!(
                 "name is empty in manifest: {}",
                 manifest_path.display()
             ));

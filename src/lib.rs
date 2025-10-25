@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use crossbeam_channel as channel;
 use manager::PluginManager;
 use once_cell::sync::OnceCell;
@@ -75,7 +75,7 @@ pub fn init(dir: PathBuf) -> Result<()> {
 
     PLUGIN_TX
         .set(tx)
-        .map_err(|_| anyhow!("Plugin system already initialised"))
+        .map_err(|_| corelib::anyhow_site!("Plugin system already initialised"))
 }
 
 pub fn with_plugin_manager_sync<F, R>(f: F) -> Result<R>
@@ -92,7 +92,7 @@ where
         PM_IN_THREAD.with(|cell| {
             let pm_ptr = cell
                 .borrow()
-                .ok_or_else(|| anyhow!("PluginManager TLS not set"))?
+                .ok_or_else(|| corelib::anyhow_site!("PluginManager TLS not set"))?
                 as *mut PluginManager;
             Ok(f(&mut *pm_ptr))
         })
@@ -115,10 +115,13 @@ where
 
     PLUGIN_TX
         .get()
-        .ok_or_else(|| anyhow!("Plugin system not initialised"))?
+        .ok_or_else(|| corelib::anyhow_site!("Plugin system not initialised"))?
         .send(cmd)
-        .map_err(|e| anyhow!("Plugin thread unexpectedly closed. error={:?}", e))?;
+        .map_err(|e| corelib::anyhow_site!(
+            "Plugin thread unexpectedly closed. error={:?}",
+            e
+        ))?;
 
     rx.await
-        .map_err(|_| anyhow!("Plugin thread dropped the response"))
+        .map_err(|_| corelib::anyhow_site!("Plugin thread dropped the response"))
 }

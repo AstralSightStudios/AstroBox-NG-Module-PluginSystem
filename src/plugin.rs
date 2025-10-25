@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use pollster::block_on;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
@@ -30,12 +30,15 @@ pub struct PluginRuntime {
 impl PluginRuntime {
     pub fn initialise(path: &Path, manifest: &PluginManifest) -> Result<Self> {
         if !path.exists() {
-            return Err(anyhow!("plugin directory does not exist: {}", path.display()));
+            return Err(corelib::anyhow_site!(
+                "plugin directory does not exist: {}",
+                path.display()
+            ));
         }
 
         let entry_path = manifest.entry_wasm_path(path);
         if !entry_path.is_file() {
-            return Err(anyhow!(
+            return Err(corelib::anyhow_site!(
                 "plugin entry file does not exist: {}",
                 entry_path.display()
             ));
@@ -123,7 +126,10 @@ pub struct Plugin {
 impl Plugin {
     pub fn load(path: PathBuf) -> Result<Self> {
         if !path.is_dir() {
-            return Err(anyhow!("Invalid plugin path: {}", path.display()));
+            return Err(corelib::anyhow_site!(
+                "Invalid plugin path: {}",
+                path.display()
+            ));
         }
 
         let manifest = PluginManifest::load_from_dir(&path)?;

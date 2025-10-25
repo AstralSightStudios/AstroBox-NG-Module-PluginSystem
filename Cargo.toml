@@ -15,3 +15,4 @@ zip = "0.6"
 wasmtime = { version = "38.0.2", features = ["async", "component-model", "component-model-async"] }
 wasmtime-wasi = "38.0.2"
 pollster = "0.3"
+corelib = { path = "../core" }
