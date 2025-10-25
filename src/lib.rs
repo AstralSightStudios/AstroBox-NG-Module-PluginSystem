@@ -117,7 +117,7 @@ where
         .get()
         .ok_or_else(|| anyhow!("Plugin system not initialised"))?
         .send(cmd)
-        .map_err(|e| anyhow!("Plugin thread unexpectedly closed. error={}", e.to_string()))?;
+        .map_err(|e| anyhow!("Plugin thread unexpectedly closed. error={:?}", e))?;
 
     rx.await
         .map_err(|_| anyhow!("Plugin thread dropped the response"))
