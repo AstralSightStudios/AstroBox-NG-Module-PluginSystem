@@ -18,6 +18,8 @@ pub mod bindings {
             "astrobox:psys-host/os/platform": async | store,
             "astrobox:psys-host/os/version": async | store,
             "astrobox:psys-host/transport/send": async | store,
+            "astrobox:psys-host/transport/request": async | store,
+            "astrobox:psys-host/ui/show-dialog": async | store,
             "astrobox:psys-host/device/get-device-list": async | store,
             "astrobox:psys-host/device/get-connected-device-list": async | store,
             "astrobox:psys-host/device/disconnect-device": async | store,

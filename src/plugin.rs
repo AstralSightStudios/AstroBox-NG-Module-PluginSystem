@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
-use wasmtime_wasi::{p2, DirPerms, FilePerms, WasiCtx, WasiCtxBuilder};
+use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, p2};
 
 use crate::api::host::PluginCtx;
 use crate::bindings::PsysWorld;
@@ -87,16 +87,16 @@ impl PluginRuntime {
 
     fn create_store(&self) -> Result<Store<PluginCtx>> {
         let wasi_ctx = self.build_wasi_ctx()?;
-        Ok(Store::new(
-            &self.engine,
-            PluginCtx::new(wasi_ctx),
-        ))
+        Ok(Store::new(&self.engine, PluginCtx::new(wasi_ctx)))
     }
 
     fn build_linker(&self) -> Result<Linker<PluginCtx>> {
         let mut linker = Linker::new(&self.engine);
         p2::add_to_linker_async(&mut linker)
             .context("Failed to register the WASI interface with Linker")?;
+
+        wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
+            .context("Failed to register wasi-http with Linker")?;
 
         PsysWorld::add_to_linker::<PluginCtx, PluginCtx>(&mut linker, |ctx| ctx)
             .context("Failed to register the plugin host interface")?;
@@ -108,13 +108,14 @@ impl PluginRuntime {
         let mut store = self.create_store()?;
         let linker = self.build_linker()?;
 
-        let instance = PsysWorld::instantiate_async(
-            &mut store,
-            &self.component,
-            &linker,
-        )
-        .await
-        .context("Failed to instantiate plugin component")?;
+        let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to instantiate plugin component. detail: {}",
+                    e.to_string()
+                )
+            })?;
 
         let lifecycle = instance.astrobox_psys_plugin_lifecycle();
         lifecycle

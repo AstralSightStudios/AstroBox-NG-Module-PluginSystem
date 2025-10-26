@@ -62,7 +62,7 @@ impl PluginManager {
                     Err(err) => {
                         should_remove = true;
                         plugin.stop();
-                        Err(err.context(format!("plugin '{}' on_load failed", name)))
+                        Err(anyhow::anyhow!("plugin '{}' on_load failed. detail: {}", name, err))
                     }
                 }
             }
