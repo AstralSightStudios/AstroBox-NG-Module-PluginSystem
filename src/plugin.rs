@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, p2};
+use tauri::AppHandle;
 
 use crate::api::host::PluginCtx;
 use crate::bindings::PsysWorld;
@@ -33,10 +34,11 @@ pub struct PluginRuntime {
     engine: Engine,
     component: Component,
     plugin_root: PathBuf,
+    app_handle: AppHandle,
 }
 
 impl PluginRuntime {
-    pub fn initialise(path: &Path, manifest: &PluginManifest) -> Result<Self> {
+    pub fn initialise(path: &Path, manifest: &PluginManifest, app_handle: AppHandle) -> Result<Self> {
         if !path.exists() {
             return Err(corelib::anyhow_site!(
                 "plugin directory does not exist: {}",
@@ -66,6 +68,7 @@ impl PluginRuntime {
             engine,
             component,
             plugin_root: path.to_path_buf(),
+            app_handle,
         })
     }
 
@@ -87,7 +90,10 @@ impl PluginRuntime {
 
     fn create_store(&self) -> Result<Store<PluginCtx>> {
         let wasi_ctx = self.build_wasi_ctx()?;
-        Ok(Store::new(&self.engine, PluginCtx::new(wasi_ctx)))
+        Ok(Store::new(
+            &self.engine,
+            PluginCtx::new(wasi_ctx, self.app_handle.clone()),
+        ))
     }
 
     fn build_linker(&self) -> Result<Linker<PluginCtx>> {
@@ -136,7 +142,7 @@ pub struct Plugin {
 }
 
 impl Plugin {
-    pub fn load(path: PathBuf) -> Result<Self> {
+    pub fn load(path: PathBuf, app_handle: AppHandle) -> Result<Self> {
         if !path.is_dir() {
             return Err(corelib::anyhow_site!(
                 "Invalid plugin path: {}",
@@ -146,7 +152,7 @@ impl Plugin {
 
         let manifest = PluginManifest::load_from_dir(&path)?;
 
-        let runtime = PluginRuntime::initialise(&path, &manifest)?;
+        let runtime = PluginRuntime::initialise(&path, &manifest, app_handle)?;
 
         Ok(Self {
             path,

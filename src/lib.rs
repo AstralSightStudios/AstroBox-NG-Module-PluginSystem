@@ -5,6 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::{cell::RefCell, path::PathBuf, thread};
 use tokio::sync::{mpsc, oneshot};
+use tauri::AppHandle;
 
 pub mod api;
 pub mod bindings {
@@ -52,7 +53,7 @@ thread_local! {
 }
 static PLUGIN_THREAD_ID: OnceCell<thread::ThreadId> = OnceCell::new();
 
-pub fn init(dir: PathBuf) -> Result<()> {
+pub fn init(dir: PathBuf, app_handle: AppHandle) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Command>();
 
     std::thread::spawn(move || {
@@ -68,7 +69,7 @@ pub fn init(dir: PathBuf) -> Result<()> {
         };
 
         runtime.block_on(async move {
-            let mut pm = PluginManager::new(dir);
+            let mut pm = PluginManager::new(dir, app_handle);
 
             tokio::task::block_in_place(|| {
                 PM_IN_THREAD.with(|cell| *cell.borrow_mut() = Some(&mut pm as *mut _));

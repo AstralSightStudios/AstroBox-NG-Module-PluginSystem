@@ -5,27 +5,30 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use zip::ZipArchive;
+use tauri::AppHandle;
 
 use crate::manifest::PluginManifest;
 use crate::plugin::{Plugin, PluginData};
 
 pub struct PluginManager {
     plugin_root: PathBuf,
+    app_handle: AppHandle,
     pub plugins: HashMap<String, Plugin>,
     pub updated: bool,
 }
 
 impl PluginManager {
-    pub fn new(root: PathBuf) -> Self {
+    pub fn new(root: PathBuf, app_handle: AppHandle) -> Self {
         Self {
             plugin_root: root,
+            app_handle,
             plugins: HashMap::new(),
             updated: false,
         }
     }
 
     pub async fn add(&mut self, path: &Path) -> Result<()> {
-        let plugin = Plugin::load(path.to_path_buf())?;
+        let plugin = Plugin::load(path.to_path_buf(), self.app_handle.clone())?;
         let name = plugin.manifest.name.clone();
 
         self.plugins.insert(name, plugin);

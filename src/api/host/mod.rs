@@ -1,3 +1,4 @@
+use tauri::AppHandle;
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
@@ -9,15 +10,21 @@ pub struct PluginCtx {
     table: ResourceTable,
     wasi_ctx: WasiCtx,
     http_ctx: WasiHttpCtx,
+    app_handle: AppHandle,
 }
 
 impl PluginCtx {
-    pub fn new(wasi_ctx: WasiCtx) -> Self {
+    pub fn new(wasi_ctx: WasiCtx, app_handle: AppHandle) -> Self {
         Self {
             table: ResourceTable::new(),
             wasi_ctx,
             http_ctx: WasiHttpCtx::new(),
+            app_handle,
         }
+    }
+
+    pub(crate) fn app_handle(&self) -> AppHandle {
+        self.app_handle.clone()
     }
 }
 
