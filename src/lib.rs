@@ -1,9 +1,10 @@
-use anyhow::Result;
-use crossbeam_channel as channel;
+use anyhow::{Error, Result};
 use manager::PluginManager;
 use once_cell::sync::OnceCell;
+use std::future::Future;
+use std::pin::Pin;
 use std::{cell::RefCell, path::PathBuf, thread};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 pub mod api;
 pub mod bindings {
@@ -11,11 +12,26 @@ pub mod bindings {
         path: "wit",
         world: "psys-world",
         imports: {
-            "astrobox:psys-host/debug/send-raw": async | store,
+            "astrobox:psys-host/os/arch": async | store,
+            "astrobox:psys-host/os/hostname": async | store,
+            "astrobox:psys-host/os/locale": async | store,
+            "astrobox:psys-host/os/platform": async | store,
+            "astrobox:psys-host/os/version": async | store,
+            "astrobox:psys-host/transport/send": async | store,
+            "astrobox:psys-host/device/get-device-list": async | store,
+            "astrobox:psys-host/device/get-connected-device-list": async | store,
             "astrobox:psys-host/device/disconnect-device": async | store,
+            "astrobox:psys-host/register/register-transport-recv": async | store,
+            "astrobox:psys-host/register/register-interconnect-recv": async | store,
+            "astrobox:psys-host/register/register-deeplink-action": async | store,
+            "astrobox:psys-host/register/register-provider": async | store,
             "astrobox:psys-host/interconnect/send-qaic-message": async | store,
+            "astrobox:psys-host/picker/pick-file": async | store,
             "astrobox:psys-host/thirdpartyapp/launch-qa": async | store,
             "astrobox:psys-host/thirdpartyapp/get-thirdparty-app-list": async | store,
+        },
+        exports: {
+            default: async,
         },
     });
 }
@@ -23,18 +39,19 @@ pub mod manager;
 pub mod manifest;
 pub mod plugin;
 
+type CommandFuture<'pm> = Pin<Box<dyn Future<Output = ()> + 'pm>>;
+enum Command {
+    Exec(Box<dyn for<'pm> FnOnce(&'pm mut PluginManager) -> CommandFuture<'pm> + Send>),
+}
+static PLUGIN_TX: OnceCell<mpsc::UnboundedSender<Command>> = OnceCell::new();
+
 thread_local! {
     static PM_IN_THREAD: RefCell<Option<*mut PluginManager>> = const { RefCell::new(None) };
 }
 static PLUGIN_THREAD_ID: OnceCell<thread::ThreadId> = OnceCell::new();
 
-enum Command {
-    Exec(Box<dyn FnOnce(&mut PluginManager) + Send + 'static>),
-}
-static PLUGIN_TX: OnceCell<channel::Sender<Command>> = OnceCell::new();
-
 pub fn init(dir: PathBuf) -> Result<()> {
-    let (tx, rx) = channel::unbounded::<Command>();
+    let (tx, mut rx) = mpsc::unbounded_channel::<Command>();
 
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -58,15 +75,15 @@ pub fn init(dir: PathBuf) -> Result<()> {
                 }
             });
 
-            if let Err(e) = pm.load_from_dir() {
+            if let Err(e) = pm.load_from_dir().await {
                 log::error!("PluginManager init failed: {e}");
                 return;
             }
 
-            while let Ok(cmd) = rx.recv() {
+            while let Some(cmd) = rx.recv().await {
                 match cmd {
                     Command::Exec(task) => {
-                        task(&mut pm);
+                        task(&mut pm).await;
                     }
                 }
             }
@@ -99,28 +116,45 @@ where
     }
 }
 
-pub async fn with_plugin_manager_async<F, R>(f: F) -> Result<R>
+pub async fn with_plugin_manager_async<F, Fut, R>(f: F) -> Result<R>
 where
-    F: FnOnce(&mut PluginManager) -> R + Send + 'static,
+    F: FnOnce(&mut PluginManager) -> Fut + Send + 'static,
+    Fut: Future<Output = R> + Send + 'static,
     R: Send + 'static,
 {
     if Some(thread::current().id()) == PLUGIN_THREAD_ID.get().copied() {
-        return with_plugin_manager_sync(f);
+        let fut = unsafe {
+            PM_IN_THREAD.with(|cell| {
+                let pm_ptr = cell
+                    .borrow()
+                    .ok_or_else(|| corelib::anyhow_site!("PluginManager TLS not set"))?
+                    as *mut PluginManager;
+                // Safety: 我们当前运行在插件线程内，pm_ptr 的独占访问得到保证
+                Ok::<Fut, Error>(f(&mut *pm_ptr))
+            })
+        }?;
+        return Ok(fut.await);
     }
 
     let (tx, rx) = oneshot::channel();
     let cmd = Command::Exec(Box::new(move |pm| {
-        let _ = tx.send(f(pm));
+        let fut = f(pm);
+        Box::pin(async move {
+            let result = fut.await;
+            let _ = tx.send(result);
+        })
     }));
 
     PLUGIN_TX
         .get()
         .ok_or_else(|| corelib::anyhow_site!("Plugin system not initialised"))?
         .send(cmd)
-        .map_err(|e| corelib::anyhow_site!(
-            "Plugin thread unexpectedly closed. error={:?}",
-            e
-        ))?;
+        .map_err(|e| {
+            corelib::anyhow_site!(
+                "Plugin thread unexpectedly closed. error={:?}",
+                e
+            )
+        })?;
 
     rx.await
         .map_err(|_| corelib::anyhow_site!("Plugin thread dropped the response"))

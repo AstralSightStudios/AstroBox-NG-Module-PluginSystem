@@ -24,14 +24,56 @@ impl PluginManager {
         }
     }
 
-    pub fn add(&mut self, path: &Path) -> Result<()> {
-        let mut plugin = Plugin::load(path.to_path_buf())?;
+    pub async fn add(&mut self, path: &Path) -> Result<()> {
+        let plugin = Plugin::load(path.to_path_buf())?;
         let name = plugin.manifest.name.clone();
-
-        plugin.run()?;
 
         self.plugins.insert(name, plugin);
         Ok(())
+    }
+
+    pub async fn start_all(&mut self) {
+        let mut names: Vec<String> = self.plugins.keys().cloned().collect();
+        names.sort();
+
+        for name in names {
+            if let Err(err) = self.start_plugin(&name).await {
+                log::error!("Failed to start plugin {}: {err}", name);
+            }
+        }
+    }
+
+    pub async fn start_plugin(&mut self, name: &str) -> Result<()> {
+        let mut should_remove = false;
+
+        let result = match self.plugins.get_mut(name) {
+            Some(plugin) => {
+                if plugin.state.disabled {
+                    log::info!("Plugin {} is disabled, skip starting", name);
+                    return Ok(());
+                }
+
+                if plugin.state.loaded {
+                    return Ok(());
+                }
+
+                match plugin.run().await {
+                    Ok(()) => Ok(()),
+                    Err(err) => {
+                        should_remove = true;
+                        plugin.stop();
+                        Err(err.context(format!("plugin '{}' on_load failed", name)))
+                    }
+                }
+            }
+            None => Err(corelib::anyhow_site!("Plugin '{}' not found", name)),
+        };
+
+        if should_remove {
+            self.plugins.remove(name);
+        }
+
+        result
     }
 
     pub async fn add_from_abp(&mut self, name: &String, path: &String) -> Result<()> {
@@ -70,29 +112,32 @@ impl PluginManager {
             }
         }
 
-        self.add(&dest_dir)?;
+        self.add(&dest_dir).await?;
+        self.start_plugin(name).await?;
 
         Ok(())
     }
 
-    pub fn enable(&mut self, name: &String) -> bool {
+    pub async fn enable(&mut self, name: &String) -> bool {
         log::info!("Enable plugin {}", name);
         self.updated = true;
         if let Some(plugin) = self.plugins.get_mut(name) {
-            if plugin.state.disabled {
-                match plugin.run() {
-                    Ok(()) => {
-                        log::info!("Enable successful");
-                        return true;
-                    }
-                    Err(err) => {
-                        log::error!("Failed to start plugin {}: {err}", name);
-                        plugin.stop();
-                    }
-                }
-            } else {
+            if plugin.state.loaded && !plugin.state.disabled {
                 log::info!("Plugin {} already enabled", name);
                 return true;
+            }
+
+            plugin.state.disabled = false;
+
+            match plugin.run().await {
+                Ok(()) => {
+                    log::info!("Enable successful");
+                    return true;
+                }
+                Err(err) => {
+                    log::error!("Failed to start plugin {}: {err}", name);
+                    plugin.stop();
+                }
             }
         }
 
@@ -133,18 +178,19 @@ impl PluginManager {
         }
     }
 
-    pub fn load_from_dir(&mut self) -> Result<()> {
+    pub async fn load_from_dir(&mut self) -> Result<()> {
         fs::create_dir_all(&self.plugin_root)?;
 
         for entry in fs::read_dir(&self.plugin_root)? {
             let entry = entry?;
             let path = entry.path();
             if path.is_dir() {
-                if let Err(e) = self.add(&path) {
+                if let Err(e) = self.add(&path).await {
                     log::error!("Failed to load plugin: {:?} error: {:?}", path, e);
                 }
             }
         }
+        self.start_all().await;
         Ok(())
     }
 

@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use pollster::block_on;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{p2, DirPerms, FilePerms, WasiCtx, WasiCtxBuilder};
@@ -11,9 +10,18 @@ use crate::api::host::PluginCtx;
 use crate::bindings::PsysWorld;
 use crate::manifest::PluginManifest;
 
-#[derive(Default)]
 pub struct PluginState {
     pub disabled: bool,
+    pub loaded: bool,
+}
+
+impl Default for PluginState {
+    fn default() -> Self {
+        Self {
+            disabled: false,
+            loaded: false,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -47,6 +55,7 @@ impl PluginRuntime {
         let mut config = Config::default();
         config
             .wasm_component_model(true)
+            .wasm_component_model_async(true)
             .async_support(true);
 
         let engine = Engine::new(&config).context("Failed to initialize the Wasmtime engine")?;
@@ -95,20 +104,22 @@ impl PluginRuntime {
         Ok(linker)
     }
 
-    pub fn run(&self) -> Result<()> {
+    pub async fn run(&self) -> Result<()> {
         let mut store = self.create_store()?;
         let linker = self.build_linker()?;
 
-        let instance = block_on(PsysWorld::instantiate_async(
+        let instance = PsysWorld::instantiate_async(
             &mut store,
             &self.component,
             &linker,
-        ))
+        )
+        .await
         .context("Failed to instantiate plugin component")?;
 
         let lifecycle = instance.astrobox_psys_plugin_lifecycle();
         lifecycle
             .call_on_load(&mut store)
+            .await
             .context("Failed to execute the plugin on-load callback")?;
 
         Ok(())
@@ -145,13 +156,15 @@ impl Plugin {
         })
     }
 
-    pub fn run(&mut self) -> Result<()> {
-        self.runtime.run()?;
+    pub async fn run(&mut self) -> Result<()> {
+        self.runtime.run().await?;
         self.state.disabled = false;
+        self.state.loaded = true;
         Ok(())
     }
 
     pub fn stop(&mut self) {
         self.state.disabled = true;
+        self.state.loaded = false;
     }
 }

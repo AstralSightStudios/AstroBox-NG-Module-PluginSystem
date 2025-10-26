@@ -13,6 +13,7 @@ pub struct PluginManifest {
     pub author: String,           // 插件作者
     pub website: String,          // 插件网站（例如github仓库地址）
     pub entry: String,            // 插件入口wasm文件
+    pub wasi_version: u32,        // WASI 接口版本
     pub api_level: u32,           // 插件api等级
     pub permissions: Vec<String>, // 插件权限列表
     #[serde(default)]
