@@ -43,7 +43,8 @@ impl psys_host::transport::HostWithStore for PluginCtx {
         accessor: &Accessor<T, Self>,
         device_addr: HostString,
         data: HostVec<u8>,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<HostVec<u8>, ()>>> + Send {
+    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<HostVec<u8>, ()>>> + Send
+    {
         let instance = accessor.instance();
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {
@@ -54,5 +55,4 @@ impl psys_host::transport::HostWithStore for PluginCtx {
         });
         async move { future }
     }
-
 }

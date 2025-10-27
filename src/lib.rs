@@ -4,8 +4,8 @@ use once_cell::sync::OnceCell;
 use std::future::Future;
 use std::pin::Pin;
 use std::{cell::RefCell, path::PathBuf, thread};
-use tokio::sync::{mpsc, oneshot};
 use tauri::AppHandle;
+use tokio::sync::{mpsc, oneshot};
 
 pub mod api;
 pub mod bindings {
@@ -57,6 +57,7 @@ pub fn init(dir: PathBuf, app_handle: AppHandle) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Command>();
 
     std::thread::spawn(move || {
+        log::info!("Building multi_thread plugin runtime...");
         let runtime = match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -68,6 +69,7 @@ pub fn init(dir: PathBuf, app_handle: AppHandle) -> Result<()> {
             }
         };
 
+        let dir_cl = dir.clone();
         runtime.block_on(async move {
             let mut pm = PluginManager::new(dir, app_handle);
 
@@ -78,6 +80,10 @@ pub fn init(dir: PathBuf, app_handle: AppHandle) -> Result<()> {
                 }
             });
 
+            log::info!(
+                "Loading plugins from dir {}",
+                dir_cl.to_string_lossy().to_string()
+            );
             if let Err(e) = pm.load_from_dir().await {
                 log::error!("PluginManager init failed: {e}");
                 return;
@@ -152,12 +158,7 @@ where
         .get()
         .ok_or_else(|| corelib::anyhow_site!("Plugin system not initialised"))?
         .send(cmd)
-        .map_err(|e| {
-            corelib::anyhow_site!(
-                "Plugin thread unexpectedly closed. error={:?}",
-                e
-            )
-        })?;
+        .map_err(|e| corelib::anyhow_site!("Plugin thread unexpectedly closed. error={:?}", e))?;
 
     rx.await
         .map_err(|_| corelib::anyhow_site!("Plugin thread dropped the response"))

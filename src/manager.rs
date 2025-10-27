@@ -4,8 +4,8 @@ use std::fs::{self, File};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use zip::ZipArchive;
 use tauri::AppHandle;
+use zip::ZipArchive;
 
 use crate::manifest::PluginManifest;
 use crate::plugin::{Plugin, PluginData};
@@ -28,10 +28,15 @@ impl PluginManager {
     }
 
     pub async fn add(&mut self, path: &Path) -> Result<()> {
+        log::info!(
+            "Loading plugin from path {}",
+            path.to_string_lossy().to_string()
+        );
         let plugin = Plugin::load(path.to_path_buf(), self.app_handle.clone())?;
         let name = plugin.manifest.name.clone();
 
-        self.plugins.insert(name, plugin);
+        self.plugins.insert(name.clone(), plugin);
+        log::info!("Plugin {} loaded!", name);
         Ok(())
     }
 
@@ -65,7 +70,11 @@ impl PluginManager {
                     Err(err) => {
                         should_remove = true;
                         plugin.stop();
-                        Err(anyhow::anyhow!("plugin '{}' on_load failed. detail: {}", name, err))
+                        Err(anyhow::anyhow!(
+                            "plugin '{}' on_load failed. detail: {}",
+                            name,
+                            err
+                        ))
                     }
                 }
             }

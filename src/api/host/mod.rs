@@ -51,13 +51,13 @@ impl wasmtime::component::HasData for PluginCtx {
     type Data<'a> = &'a mut PluginCtx;
 }
 
-mod os;
-mod transport;
 mod device;
-mod register;
 mod event;
-mod queue;
 mod interconnect;
+mod os;
 mod picker;
+mod queue;
+mod register;
 mod thirdpartyapp;
+mod transport;
 mod ui;

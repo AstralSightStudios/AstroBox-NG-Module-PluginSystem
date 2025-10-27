@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use tauri::AppHandle;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, p2};
-use tauri::AppHandle;
 
 use crate::api::host::PluginCtx;
 use crate::bindings::PsysWorld;
@@ -30,7 +30,38 @@ pub struct PluginData {
     pub metadata: HashMap<String, String>,
 }
 
+#[cfg(target_os = "ios")]
+fn configure_engine(config: &mut Config) -> Result<()> {
+    let pulley_triple = if cfg!(target_pointer_width = "32") {
+        if cfg!(target_endian = "big") {
+            "pulley32be"
+        } else {
+            "pulley32"
+        }
+    } else if cfg!(target_endian = "big") {
+        "pulley64be"
+    } else {
+        "pulley64"
+    };
+
+    config.target(pulley_triple).with_context(|| {
+        format!("failed to select Wasmtime interpreter target `{pulley_triple}` for iOS")
+    })?;
+
+    log::info!(
+        "Detected iOS runtime; Wasmtime configured for interpreter mode via target `{pulley_triple}`"
+    );
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "ios"))]
+fn configure_engine(_config: &mut Config) -> Result<()> {
+    Ok(())
+}
+
 pub struct PluginRuntime {
+    name: String,
     engine: Engine,
     component: Component,
     plugin_root: PathBuf,
@@ -38,7 +69,11 @@ pub struct PluginRuntime {
 }
 
 impl PluginRuntime {
-    pub fn initialise(path: &Path, manifest: &PluginManifest, app_handle: AppHandle) -> Result<Self> {
+    pub fn initialise(
+        path: &Path,
+        manifest: &PluginManifest,
+        app_handle: AppHandle,
+    ) -> Result<Self> {
         if !path.exists() {
             return Err(corelib::anyhow_site!(
                 "plugin directory does not exist: {}",
@@ -55,16 +90,23 @@ impl PluginRuntime {
         }
 
         let mut config = Config::default();
+        configure_engine(&mut config)?;
         config
             .wasm_component_model(true)
             .wasm_component_model_async(true)
             .async_support(true);
+
+        log::info!(
+            "Creating wasmtime engine for plugin {}...",
+            manifest.clone().name
+        );
 
         let engine = Engine::new(&config).context("Failed to initialize the Wasmtime engine")?;
         let component = Component::from_file(&engine, &entry_path)
             .with_context(|| format!("Failed to load plugin entry: {}", entry_path.display()))?;
 
         Ok(Self {
+            name: manifest.name.clone(),
             engine,
             component,
             plugin_root: path.to_path_buf(),
@@ -111,9 +153,12 @@ impl PluginRuntime {
     }
 
     pub async fn run(&self) -> Result<()> {
+        log::info!("Creating store for plugin {}...", self.name.clone());
         let mut store = self.create_store()?;
+        log::info!("Building linker for plugin {}...", self.name.clone());
         let linker = self.build_linker()?;
 
+        log::info!("Instantiating world for plugin {}...", self.name.clone());
         let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
             .await
             .map_err(|e| {
@@ -123,6 +168,7 @@ impl PluginRuntime {
                 )
             })?;
 
+        log::info!("Calling on_load for plugin {}...", self.name.clone());
         let lifecycle = instance.astrobox_psys_plugin_lifecycle();
         lifecycle
             .call_on_load(&mut store)
@@ -152,6 +198,10 @@ impl Plugin {
 
         let manifest = PluginManifest::load_from_dir(&path)?;
 
+        log::info!(
+            "Initializing wasi runtime for plugin {}...",
+            manifest.clone().name
+        );
         let runtime = PluginRuntime::initialise(&path, &manifest, app_handle)?;
 
         Ok(Self {

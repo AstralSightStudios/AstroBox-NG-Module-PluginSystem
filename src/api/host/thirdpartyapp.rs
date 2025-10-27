@@ -35,10 +35,9 @@ impl psys_host::thirdpartyapp::HostWithStore for PluginCtx {
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {
                 let _ = addr;
-                Ok::<
-                    core::result::Result<HostVec<psys_host::thirdpartyapp::AppInfo>, ()>,
-                    Error,
-                >(Ok(HostVec::new()))
+                Ok::<core::result::Result<HostVec<psys_host::thirdpartyapp::AppInfo>, ()>, Error>(
+                    Ok(HostVec::new()),
+                )
             })
         });
         async move { future }

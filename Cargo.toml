@@ -16,7 +16,7 @@ pollster = "0.3"
 corelib = { path = "../core" }
 
 # Wasmtime
-wasmtime = { version = "38.0.3", features = ["async", "component-model", "component-model-async"] }
+wasmtime = { version = "38.0.3", features = ["async", "component-model", "component-model-async", "pulley"] }
 wasmtime-wasi = "38.0.3"
 
 # Wasmtime WASI APIs

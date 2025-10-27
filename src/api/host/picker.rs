@@ -11,7 +11,8 @@ impl psys_host::picker::HostWithStore for PluginCtx {
         accessor: &Accessor<T, Self>,
         config: psys_host::picker::PickConfig,
         filter: psys_host::picker::FilterConfig,
-    ) -> impl core::future::Future<Output = FutureReader<psys_host::picker::PickResult>> + Send {
+    ) -> impl core::future::Future<Output = FutureReader<psys_host::picker::PickResult>> + Send
+    {
         let instance = accessor.instance();
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {

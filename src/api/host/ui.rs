@@ -50,14 +50,12 @@ async fn show_system_alert(
 ) -> Result<psys_host::ui::DialogResult, Error> {
     let title: String = info.title.into();
     let message: String = info.content.into();
-    let mut buttons: Vec<ButtonSpec> = info
-        .buttons
-        .into_iter()
-        .map(ButtonSpec::from)
-        .collect();
+    let mut buttons: Vec<ButtonSpec> = info.buttons.into_iter().map(ButtonSpec::from).collect();
 
     if buttons.is_empty() {
-        log::debug!("The system pop-up window does not provide a custom button, so use the default OK");
+        log::debug!(
+            "The system pop-up window does not provide a custom button, so use the default OK"
+        );
     }
 
     buttons.sort_by(|a, b| b.primary.cmp(&a.primary));
@@ -96,19 +94,16 @@ async fn show_system_alert(
     }
 }
 
-fn build_button_config(
-    buttons: Vec<ButtonSpec>,
-) -> (MessageDialogButtons, Vec<ButtonSpec>) {
+fn build_button_config(buttons: Vec<ButtonSpec>) -> (MessageDialogButtons, Vec<ButtonSpec>) {
     if buttons.is_empty() {
         return (MessageDialogButtons::Ok, Vec::new());
     }
 
     let config = match buttons.len() {
         1 => MessageDialogButtons::OkCustom(buttons[0].label.clone()),
-        2 => MessageDialogButtons::OkCancelCustom(
-            buttons[0].label.clone(),
-            buttons[1].label.clone(),
-        ),
+        2 => {
+            MessageDialogButtons::OkCancelCustom(buttons[0].label.clone(), buttons[1].label.clone())
+        }
         3 => MessageDialogButtons::YesNoCancelCustom(
             buttons[0].label.clone(),
             buttons[1].label.clone(),
@@ -120,10 +115,7 @@ fn build_button_config(
     (config, buttons)
 }
 
-fn resolve_dialog_result(
-    result: MessageDialogResult,
-    buttons: &[ButtonSpec],
-) -> HostString {
+fn resolve_dialog_result(result: MessageDialogResult, buttons: &[ButtonSpec]) -> HostString {
     let clicked = match result {
         MessageDialogResult::Custom(label) => buttons
             .iter()
