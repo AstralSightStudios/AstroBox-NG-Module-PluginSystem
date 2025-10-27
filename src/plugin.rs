@@ -33,11 +33,7 @@ pub struct PluginData {
 #[cfg(target_os = "ios")]
 fn configure_engine(config: &mut Config) -> Result<()> {
     let pulley_triple = if cfg!(target_pointer_width = "32") {
-        if cfg!(target_endian = "big") {
-            "pulley32be"
-        } else {
-            "pulley32"
-        }
+        if cfg!(target_endian = "big") { "pulley32be" } else { "pulley32" }
     } else if cfg!(target_endian = "big") {
         "pulley64be"
     } else {
@@ -48,8 +44,15 @@ fn configure_engine(config: &mut Config) -> Result<()> {
         format!("failed to select Wasmtime interpreter target `{pulley_triple}` for iOS")
     })?;
 
+    const RESERVE: u64 = 128 << 20; // 128 MiB
+
+    config
+        .memory_may_move(true)
+        .memory_reservation(RESERVE)
+        .memory_reservation_for_growth(RESERVE);
+
     log::info!(
-        "Detected iOS runtime; Wasmtime configured for interpreter mode via target `{pulley_triple}`"
+        "Detected iOS runtime; Wasmtime configured for interpreter mode via target `{pulley_triple}` with moving memories"
     );
 
     Ok(())
@@ -92,6 +95,7 @@ impl PluginRuntime {
         let mut config = Config::default();
         configure_engine(&mut config)?;
         config
+            .wasm_memory64(false)
             .wasm_component_model(true)
             .wasm_component_model_async(true)
             .async_support(true);
