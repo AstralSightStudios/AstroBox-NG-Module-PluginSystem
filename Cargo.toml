@@ -18,6 +18,8 @@ corelib = { path = "../core" }
 # Wasmtime
 wasmtime = { version = "38.0.3", features = ["async", "component-model", "component-model-async", "pulley"] }
 wasmtime-wasi = "38.0.3"
+sha2 = "0.10"
+hex = "0.4"
 
 # Wasmtime WASI APIs
 wasmtime-wasi-http = "38.0.3"

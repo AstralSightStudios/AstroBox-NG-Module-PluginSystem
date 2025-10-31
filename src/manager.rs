@@ -8,7 +8,7 @@ use tauri::AppHandle;
 use zip::ZipArchive;
 
 use crate::manifest::PluginManifest;
-use crate::plugin::{Plugin, PluginData};
+use crate::plugin::{Plugin, PluginData, purge_precompiled_component};
 
 pub struct PluginManager {
     plugin_root: PathBuf,
@@ -171,22 +171,27 @@ impl PluginManager {
 
     pub fn remove(&mut self, name: &String) -> bool {
         self.updated = true;
-        let dir = match self.plugins.get(name) {
-            Some(p) => p.path.clone(),
+        let plugin = match self.plugins.remove(name) {
+            Some(plugin) => plugin,
             None => {
                 log::error!("Plugin {} not found", name);
                 return false;
             }
         };
-        match self.plugins.remove(name) {
-            Some(_) => match fs::remove_dir_all(dir) {
-                Ok(_) => true,
-                Err(e) => {
-                    log::error!("Failed to remove plugin: {:?} error: {:?}", name, e);
-                    false
-                }
-            },
-            None => false,
+
+        if let Err(err) = purge_precompiled_component(&plugin.path, &plugin.manifest) {
+            log::warn!(
+                "Failed to purge precompiled artifacts for plugin {}: {err}",
+                name
+            );
+        }
+
+        match fs::remove_dir_all(&plugin.path) {
+            Ok(_) => true,
+            Err(e) => {
+                log::error!("Failed to remove plugin: {:?} error: {:?}", name, e);
+                false
+            }
         }
     }
 
