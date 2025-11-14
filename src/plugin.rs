@@ -14,7 +14,7 @@ use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, p2};
 
 use crate::api::host::PluginCtx;
-use crate::bindings::PsysWorld;
+use crate::bindings::{PsysWorld, exports::astrobox::psys_plugin};
 use crate::manifest::PluginManifest;
 
 pub struct PluginState {
@@ -251,6 +251,7 @@ fn create_engine() -> Result<Engine> {
     Engine::new(&config).context("Failed to initialize the Wasmtime engine")
 }
 
+#[derive(Clone)]
 pub struct PluginRuntime {
     name: String,
     engine: Engine,
@@ -377,6 +378,42 @@ impl PluginRuntime {
             .context("Failed to execute the plugin on-load callback")?;
 
         Ok(())
+    }
+
+    pub async fn dispatch_event(
+        &self,
+        event_type: psys_plugin::event::EventType,
+        payload: String,
+    ) -> Result<()> {
+        let mut store = self.create_store()?;
+        let linker = self.build_linker()?;
+
+        let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to instantiate plugin component for event dispatch. detail: {}",
+                    e.to_string()
+                )
+            })?;
+
+        let event_iface = instance.astrobox_psys_plugin_event();
+        let mut future = event_iface
+            .call_on_event(&mut store, event_type, payload.as_str())
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to start the plugin on-event callback. detail: {}",
+                    e.to_string()
+                )
+            })?;
+        future.close(&mut store);
+        Ok(())
+    }
+
+    pub async fn dispatch_plugin_message(&self, payload: String) -> Result<()> {
+        self.dispatch_event(psys_plugin::event::EventType::PluginMessage, payload)
+            .await
     }
 }
 
