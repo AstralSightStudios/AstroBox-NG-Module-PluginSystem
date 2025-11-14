@@ -1,8 +1,30 @@
 use crate::bindings::astrobox::psys_host;
-use anyhow::Error;
+use anyhow::{Context, Error};
+use frontbridge::invoke_frontend;
+use serde::Deserialize;
+use tauri::Manager;
 use wasmtime::component::{Accessor, FutureReader};
 
 use super::{HostString, HostVec, PluginCtx};
+
+const FRONT_DEVICE_LIST_METHOD: &str = "host/device/get_device_list";
+
+#[derive(Debug, Deserialize)]
+struct StoredDeviceRecord {
+    name: Option<String>,
+    addr: Option<String>,
+}
+
+impl StoredDeviceRecord {
+    fn into_psys_device(self) -> Option<psys_host::device::DeviceInfo> {
+        match (self.name, self.addr) {
+            (Some(name), Some(addr)) if !name.is_empty() && !addr.is_empty() => {
+                Some(psys_host::device::DeviceInfo { name, addr })
+            }
+            _ => None,
+        }
+    }
+}
 
 impl psys_host::device::Host for PluginCtx {}
 
@@ -12,9 +34,22 @@ impl psys_host::device::HostWithStore for PluginCtx {
     ) -> impl core::future::Future<Output = FutureReader<HostVec<psys_host::device::DeviceInfo>>> + Send
     {
         let instance = accessor.instance();
+        let app_handle = accessor.with(|mut access| access.get().app_handle());
         let future = accessor.with(|mut access| {
+            let app_handle = app_handle.clone();
             FutureReader::new(instance, &mut access, async move {
-                Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(HostVec::new())
+                let devices: Vec<StoredDeviceRecord> =
+                    invoke_frontend(&app_handle, FRONT_DEVICE_LIST_METHOD, ())
+                        .await
+                        .context("invoke frontend get_device_list")?;
+
+                let mut ret: HostVec<psys_host::device::DeviceInfo> = HostVec::new();
+                devices
+                    .into_iter()
+                    .filter_map(StoredDeviceRecord::into_psys_device)
+                    .for_each(|dev| ret.push(dev));
+
+                Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(ret)
             })
         });
         async move { future }
@@ -27,7 +62,24 @@ impl psys_host::device::HostWithStore for PluginCtx {
         let instance = accessor.instance();
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {
-                Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(HostVec::new())
+                let ret = corelib::ecs::with_rt_mut(|rt| {
+                    let mut ret = Vec::new();
+
+                    rt.entities.values_mut().for_each(|dev| {
+                        if let Some(device) =
+                            dev.as_any_mut().downcast_mut::<corelib::device::Device>()
+                        {
+                            ret.push(psys_host::device::DeviceInfo {
+                                addr: device.addr().to_string(),
+                                name: device.name().to_string(),
+                            });
+                        }
+                    });
+
+                    ret
+                })
+                .await;
+                Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(ret)
             })
         });
         async move { future }
@@ -38,9 +90,21 @@ impl psys_host::device::HostWithStore for PluginCtx {
         device_addr: HostString,
     ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
         let instance = accessor.instance();
+        let app_handle = accessor.with(|mut access| access.get().app_handle());
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {
-                let _ = device_addr;
+                let addr = device_addr;
+
+                app_handle
+                    .clone()
+                    .get_webview_window("main")
+                    .unwrap()
+                    .eval(format!(
+                        "window.__TAURI_INTERNALS__.invoke('miwear_disconnect', {{ addr: {} }})",
+                        addr
+                    ))
+                    .unwrap();
+
                 Ok::<core::result::Result<(), ()>, Error>(Ok(()))
             })
         });
