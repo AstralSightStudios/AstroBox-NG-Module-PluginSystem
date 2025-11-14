@@ -100,7 +100,7 @@ impl psys_host::device::HostWithStore for PluginCtx {
                     .get_webview_window("main")
                     .unwrap()
                     .eval(format!(
-                        "window.__TAURI_INTERNALS__.invoke('miwear_disconnect', {{ addr: {} }})",
+                        "window.__TAURI_INTERNALS__.invoke('miwear_disconnect', {{ addr: '{}' }})",
                         addr
                     ))
                     .unwrap();
