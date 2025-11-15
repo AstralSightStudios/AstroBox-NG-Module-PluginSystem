@@ -3,7 +3,7 @@ use crate::bindings::astrobox::psys_host;
 use super::{HostString, PluginCtx};
 
 impl psys_host::event::Host for PluginCtx {
-    fn send_event(&mut self, event_name: HostString, payload: HostString) {
+    fn send_event(&mut self, event_name: HostString, payload: HostString) -> wasmtime::Result<()> {
         let event_name = event_name.to_string();
         let payload_raw = payload.to_string();
 
@@ -58,5 +58,6 @@ impl psys_host::event::Host for PluginCtx {
                 }
             }
         });
+        Ok(())
     }
 }

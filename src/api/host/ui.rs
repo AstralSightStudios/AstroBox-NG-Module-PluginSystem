@@ -1,8 +1,14 @@
+use std::collections::HashMap;
+
+use rand::distributions::Alphanumeric;
+use rand::{Rng, thread_rng};
+
 use anyhow::Error;
+use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
 use tokio::sync::oneshot;
-use wasmtime::component::{Accessor, FutureReader};
+use wasmtime::component::{Accessor, FutureReader, Resource};
 
 use crate::bindings::astrobox::psys_host;
 
@@ -157,5 +163,366 @@ impl From<psys_host::ui::DialogButton> for ButtonSpec {
             label: button.content.into(),
             primary: button.primary,
         }
+    }
+}
+
+#[derive(Clone, Serialize)]
+pub struct Element {
+    id: String,
+    r#type: ElementType,
+    content: Option<String>,
+    registered_event: Vec<Event>,
+    styles: HashMap<&'static str, String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    children: Option<Vec<Element>>,
+}
+
+#[derive(Clone, Serialize)]
+enum Event {
+    CLICK,
+    HOVER,
+    CHANGE,
+    POINTERDOWN,
+    POINTERUP,
+    POINTERMOVE,
+}
+
+impl Into<Event> for psys_host::ui2::Event {
+    fn into(self) -> Event {
+        match self {
+            psys_host::ui2::Event::Click => Event::CLICK,
+            psys_host::ui2::Event::Hover => Event::HOVER,
+            psys_host::ui2::Event::Change => Event::CHANGE,
+            psys_host::ui2::Event::PointerDown => Event::POINTERDOWN,
+            psys_host::ui2::Event::PointerUp => Event::POINTERUP,
+            psys_host::ui2::Event::PointerMove => Event::POINTERMOVE,
+        }
+    }
+}
+#[derive(Clone, Serialize)]
+enum ElementType {
+    BUTTON,
+    IMAGE,
+    VIDEO,
+    AUDIO,
+    SVG,
+    DIV,
+    SPAN,
+    P,
+}
+impl Into<ElementType> for psys_host::ui2::ElementType {
+    fn into(self) -> ElementType {
+        match self {
+            psys_host::ui2::ElementType::Button => ElementType::BUTTON,
+            psys_host::ui2::ElementType::Image => ElementType::IMAGE,
+            psys_host::ui2::ElementType::Video => ElementType::VIDEO,
+            psys_host::ui2::ElementType::Audio => ElementType::AUDIO,
+            psys_host::ui2::ElementType::Svg => ElementType::SVG,
+            psys_host::ui2::ElementType::Div => ElementType::DIV,
+            psys_host::ui2::ElementType::Span => ElementType::SPAN,
+            psys_host::ui2::ElementType::P => ElementType::P,
+        }
+    }
+}
+
+impl Element {
+    fn new(type_: ElementType, content: Option<String>) -> Self {
+        Self {
+            id: thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(16)
+                .map(char::from)
+                .collect(),
+            r#type: type_,
+            content,
+            styles: HashMap::new(),
+            width: None,
+            height: None,
+            children: None,
+            registered_event: Vec::new(),
+        }
+    }
+}
+
+impl psys_host::ui2::Host for PluginCtx {
+    fn render(&mut self, element: Resource<Element>) -> wasmtime::Result<()> {
+        let el = self.table.delete(element)?;
+        let json = serde_json::to_string(&el);
+
+        Ok(())
+    }
+}
+impl psys_host::ui2::HostElement for PluginCtx {
+    fn new(
+        &mut self,
+        element_type: psys_host::ui2::ElementType,
+        content: Option<String>,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let id = self
+            .table
+            .push(Element::new(element_type.into(), content))?;
+        Ok(id)
+    }
+
+    fn get_id(&mut self, self_: Resource<Element>) -> wasmtime::Result<String> {
+        let el = self.table.get(&self_)?;
+        Ok(el.id.to_string())
+    }
+
+    fn content(
+        &mut self,
+        self_: Resource<Element>,
+        content: Option<String>,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        el.content = content;
+        Ok(self_)
+    }
+
+    fn flex(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("display", "flex".to_string());
+        Ok(self_)
+    }
+
+    fn margin(
+        &mut self,
+        self_: Resource<Element>,
+        margin: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("margin", format!("{}px", margin));
+        Ok(self_)
+    }
+
+    fn margin_top(
+        &mut self,
+        self_: Resource<Element>,
+        margin: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("margin-top", format!("{}px", margin));
+        Ok(self_)
+    }
+
+    fn margin_bottom(
+        &mut self,
+        self_: Resource<Element>,
+        margin: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("margin-bottom", format!("{}px", margin));
+        Ok(self_)
+    }
+
+    fn margin_left(
+        &mut self,
+        self_: Resource<Element>,
+        margin: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("margin-left", format!("{}px", margin));
+        Ok(self_)
+    }
+
+    fn margin_right(
+        &mut self,
+        self_: Resource<Element>,
+        margin: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("margin-right", format!("{}px", margin));
+        Ok(self_)
+    }
+
+    fn padding(
+        &mut self,
+        self_: Resource<Element>,
+        padding: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("padding", format!("{}px", padding));
+        Ok(self_)
+    }
+
+    fn padding_top(
+        &mut self,
+        self_: Resource<Element>,
+        padding: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("padding-top", format!("{}px", padding));
+        Ok(self_)
+    }
+
+    fn padding_bottom(
+        &mut self,
+        self_: Resource<Element>,
+        padding: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("padding-bottom", format!("{}px", padding));
+        Ok(self_)
+    }
+
+    fn padding_left(
+        &mut self,
+        self_: Resource<Element>,
+        padding: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("padding-left", format!("{}px", padding));
+        Ok(self_)
+    }
+
+    fn padding_right(
+        &mut self,
+        self_: Resource<Element>,
+        padding: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("padding-right", format!("{}px", padding));
+        Ok(self_)
+    }
+
+    fn align_center(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("align-items", "center".to_string());
+        Ok(self_)
+    }
+
+    fn align_end(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("align-items", "flex-end".to_string());
+        Ok(self_)
+    }
+
+    fn align_start(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("align-items", "flex-start".to_string());
+        Ok(self_)
+    }
+
+    fn justify_center(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("justify-content", "center".to_string());
+        Ok(self_)
+    }
+
+    fn justify_start(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el
+            .styles
+            .insert("justify-content", "flex-start".to_string());
+        Ok(self_)
+    }
+
+    fn justify_end(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("justify-content", "flex-end".to_string());
+        Ok(self_)
+    }
+
+    fn bg(
+        &mut self,
+        self_: Resource<Element>,
+        color: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("background", color);
+        Ok(self_)
+    }
+
+    fn text_color(
+        &mut self,
+        self_: Resource<Element>,
+        color: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("color", color);
+        Ok(self_)
+    }
+
+    fn size(&mut self, self_: Resource<Element>, size: u32) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("font-size", format!("{}px", size));
+        Ok(self_)
+    }
+
+    fn width(
+        &mut self,
+        self_: Resource<Element>,
+        width: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        el.width = Some(width);
+        let _ = el.styles.insert("width", format!("{}px", width));
+        Ok(self_)
+    }
+
+    fn height(
+        &mut self,
+        self_: Resource<Element>,
+        height: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        el.height = Some(height);
+        let _ = el.styles.insert("height", format!("{}px", height));
+        Ok(self_)
+    }
+
+    fn radius(
+        &mut self,
+        self_: Resource<Element>,
+        radius: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("border-radius", format!("{}px", radius));
+        Ok(self_)
+    }
+
+    fn border(
+        &mut self,
+        self_: Resource<Element>,
+        width: u32,
+        color: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el
+            .styles
+            .insert("border", format!("{}px solid {}", width, color));
+        Ok(self_)
+    }
+
+    fn child(
+        &mut self,
+        self_: Resource<Element>,
+        child: Resource<Element>,
+    ) -> wasmtime::Result<Resource<Element>> {
+        // Move the child out of the table and append to parent's children
+        let child_el = self.table.delete(child)?;
+        let el = self.table.get_mut(&self_)?;
+        if let Some(children) = &mut el.children {
+            children.push(child_el);
+        } else {
+            el.children = Some(vec![child_el]);
+        }
+        Ok(self_)
+    }
+
+    fn on(
+        &mut self,
+        self_: Resource<Element>,
+        event: psys_host::ui2::Event,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.registered_event.push(event.into());
+        Ok(self_)
+    }
+
+    fn drop(&mut self, rep: Resource<Element>) -> wasmtime::Result<()> {
+        let el = self.table.delete(rep)?;
+        Ok(drop(el))
     }
 }

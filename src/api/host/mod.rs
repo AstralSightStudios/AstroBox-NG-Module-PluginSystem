@@ -60,4 +60,4 @@ mod queue;
 mod register;
 mod thirdpartyapp;
 mod transport;
-mod ui;
+pub mod ui;

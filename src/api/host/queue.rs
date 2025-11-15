@@ -7,6 +7,7 @@ impl psys_host::queue::Host for PluginCtx {
         &mut self,
         _res_type: psys_host::queue::ResourceType,
         _file_path: HostString,
-    ) {
+    ) -> wasmtime::Result<()> {
+        Ok(())
     }
 }

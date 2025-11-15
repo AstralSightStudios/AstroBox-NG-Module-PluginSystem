@@ -9,16 +9,16 @@ impl psys_host::transport::Host for PluginCtx {
         &mut self,
         _protocol: psys_host::transport::Protocol,
         _data: HostVec<u8>,
-    ) -> HostString {
-        HostString::default()
+    ) -> wasmtime::Result<HostString> {
+        Ok(HostString::default())
     }
 
     fn from_json(
         &mut self,
         _protocol: psys_host::transport::Protocol,
         _data: HostString,
-    ) -> core::result::Result<HostVec<u8>, ()> {
-        Ok(HostVec::new())
+    ) -> wasmtime::Result<Result<HostVec<u8>, ()>> {
+        Ok(Ok(HostVec::new()))
     }
 }
 

@@ -12,6 +12,9 @@ pub mod bindings {
     wasmtime::component::bindgen!({
         path: "wit",
         world: "psys-world",
+        with:{
+            "astrobox:psys-host/ui2/element": crate::api::host::ui::Element,
+        },
         imports: {
             "astrobox:psys-host/os/arch": async | store,
             "astrobox:psys-host/os/hostname": async | store,
@@ -32,6 +35,7 @@ pub mod bindings {
             "astrobox:psys-host/picker/pick-file": async | store,
             "astrobox:psys-host/thirdpartyapp/launch-qa": async | store,
             "astrobox:psys-host/thirdpartyapp/get-thirdparty-app-list": async | store,
+            default: trappable
         },
         exports: {
             default: async,
