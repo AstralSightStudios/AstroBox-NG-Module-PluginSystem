@@ -171,11 +171,17 @@ pub struct Element {
     id: String,
     r#type: ElementType,
     content: Option<String>,
-    registered_event: Vec<Event>,
+    event_listeners: Vec<EventListener>,
     styles: HashMap<&'static str, String>,
     width: Option<u32>,
     height: Option<u32>,
     children: Option<Vec<Element>>,
+}
+
+#[derive(Clone, Serialize)]
+struct EventListener {
+    id: String,
+    event: Event,
 }
 
 #[derive(Clone, Serialize)]
@@ -240,7 +246,7 @@ impl Element {
             width: None,
             height: None,
             children: None,
-            registered_event: Vec::new(),
+            event_listeners: Vec::new(),
         }
     }
 }
@@ -263,11 +269,6 @@ impl psys_host::ui2::HostElement for PluginCtx {
             .table
             .push(Element::new(element_type.into(), content))?;
         Ok(id)
-    }
-
-    fn get_id(&mut self, self_: Resource<Element>) -> wasmtime::Result<String> {
-        let el = self.table.get(&self_)?;
-        Ok(el.id.to_string())
     }
 
     fn content(
@@ -515,14 +516,102 @@ impl psys_host::ui2::HostElement for PluginCtx {
         &mut self,
         self_: Resource<Element>,
         event: psys_host::ui2::Event,
+        id: String,
     ) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
-        let _ = el.registered_event.push(event.into());
+        let _ = el.event_listeners.push(EventListener {
+            id,
+            event: event.into(),
+        });
         Ok(self_)
     }
 
     fn drop(&mut self, rep: Resource<Element>) -> wasmtime::Result<()> {
         let el = self.table.delete(rep)?;
         Ok(drop(el))
+    }
+
+    fn relative(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("position", "relative".to_string());
+        Ok(self_)
+    }
+
+    fn absolute(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("position", "absolute".to_string());
+        Ok(self_)
+    }
+
+    fn top(
+        &mut self,
+        self_: Resource<Element>,
+        position: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("top", format!("{}px", position));
+        Ok(self_)
+    }
+
+    fn bottom(
+        &mut self,
+        self_: Resource<Element>,
+        position: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("bottom", format!("{}px", position));
+        Ok(self_)
+    }
+
+    fn left(
+        &mut self,
+        self_: Resource<Element>,
+        position: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("left", format!("{}px", position));
+        Ok(self_)
+    }
+
+    fn right(
+        &mut self,
+        self_: Resource<Element>,
+        position: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("right", format!("{}px", position));
+        Ok(self_)
+    }
+
+    fn opacity(
+        &mut self,
+        self_: Resource<Element>,
+        opacity: f32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("opacity", format!("{}", opacity));
+        Ok(self_)
+    }
+
+    fn transition(
+        &mut self,
+        self_: Resource<Element>,
+        transition: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("transition", transition);
+        Ok(self_)
+    }
+
+    fn z_index(&mut self, self_: Resource<Element>, z: i32) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("z-index", z.to_string());
+        Ok(self_)
+    }
+
+    fn disabled(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("disabled", "true".to_string());
+        Ok(self_)
     }
 }
