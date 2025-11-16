@@ -13,7 +13,7 @@ pub mod bindings {
         path: "wit",
         world: "psys-world",
         with:{
-            "astrobox:psys-host/ui2/element": crate::api::host::ui::Element,
+            "astrobox:psys-host/ui/element": crate::api::host::ui::Element,
         },
         imports: {
             "astrobox:psys-host/os/arch": async | store,
@@ -23,7 +23,7 @@ pub mod bindings {
             "astrobox:psys-host/os/version": async | store,
             "astrobox:psys-host/transport/send": async | store,
             "astrobox:psys-host/transport/request": async | store,
-            "astrobox:psys-host/ui/show-dialog": async | store,
+            "astrobox:psys-host/dialog/show-dialog": async | store,
             "astrobox:psys-host/device/get-device-list": async | store,
             "astrobox:psys-host/device/get-connected-device-list": async | store,
             "astrobox:psys-host/device/disconnect-device": async | store,

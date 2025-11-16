@@ -14,15 +14,16 @@ use crate::bindings::astrobox::psys_host;
 
 use super::{HostString, PluginCtx};
 
-impl psys_host::ui::Host for PluginCtx {}
+impl psys_host::dialog::Host for PluginCtx {}
 
-impl psys_host::ui::HostWithStore for PluginCtx {
+impl psys_host::dialog::HostWithStore for PluginCtx {
     fn show_dialog<T>(
         accessor: &Accessor<T, Self>,
-        dialog_type: psys_host::ui::DialogType,
-        style: psys_host::ui::DialogStyle,
-        info: psys_host::ui::DialogInfo,
-    ) -> impl core::future::Future<Output = FutureReader<psys_host::ui::DialogResult>> + Send {
+        dialog_type: psys_host::dialog::DialogType,
+        style: psys_host::dialog::DialogStyle,
+        info: psys_host::dialog::DialogInfo,
+    ) -> impl core::future::Future<Output = FutureReader<psys_host::dialog::DialogResult>> + Send
+    {
         let instance = accessor.instance();
         let future = accessor.with(|mut access| {
             let app_handle = {
@@ -32,8 +33,8 @@ impl psys_host::ui::HostWithStore for PluginCtx {
             FutureReader::new(instance, &mut access, async move {
                 match (dialog_type, style) {
                     (
-                        psys_host::ui::DialogType::Alert,
-                        psys_host::ui::DialogStyle::System,
+                        psys_host::dialog::DialogType::Alert,
+                        psys_host::dialog::DialogStyle::System,
                     ) => show_system_alert(app_handle, info).await,
                     _ => {
                         log::warn!(
@@ -52,8 +53,8 @@ impl psys_host::ui::HostWithStore for PluginCtx {
 
 async fn show_system_alert(
     app_handle: AppHandle,
-    info: psys_host::ui::DialogInfo,
-) -> Result<psys_host::ui::DialogResult, Error> {
+    info: psys_host::dialog::DialogInfo,
+) -> Result<psys_host::dialog::DialogResult, Error> {
     let title: String = info.title.into();
     let message: String = info.content.into();
     let mut buttons: Vec<ButtonSpec> = info.buttons.into_iter().map(ButtonSpec::from).collect();
@@ -84,7 +85,7 @@ async fn show_system_alert(
         .buttons(button_config)
         .show_with_result(move |result| {
             let clicked_btn_id = resolve_dialog_result(result, &mapping);
-            let dialog_result = psys_host::ui::DialogResult {
+            let dialog_result = psys_host::dialog::DialogResult {
                 clicked_btn_id,
                 input_result: HostString::default(),
             };
@@ -142,8 +143,8 @@ fn resolve_dialog_result(result: MessageDialogResult, buttons: &[ButtonSpec]) ->
     clicked.into()
 }
 
-fn default_dialog_result() -> psys_host::ui::DialogResult {
-    psys_host::ui::DialogResult {
+fn default_dialog_result() -> psys_host::dialog::DialogResult {
+    psys_host::dialog::DialogResult {
         clicked_btn_id: HostString::default(),
         input_result: HostString::default(),
     }
@@ -156,8 +157,8 @@ struct ButtonSpec {
     primary: bool,
 }
 
-impl From<psys_host::ui::DialogButton> for ButtonSpec {
-    fn from(button: psys_host::ui::DialogButton) -> Self {
+impl From<psys_host::dialog::DialogButton> for ButtonSpec {
+    fn from(button: psys_host::dialog::DialogButton) -> Self {
         Self {
             id: button.id.into(),
             label: button.content.into(),
@@ -194,15 +195,15 @@ enum Event {
     POINTERMOVE,
 }
 
-impl Into<Event> for psys_host::ui2::Event {
+impl Into<Event> for psys_host::ui::Event {
     fn into(self) -> Event {
         match self {
-            psys_host::ui2::Event::Click => Event::CLICK,
-            psys_host::ui2::Event::Hover => Event::HOVER,
-            psys_host::ui2::Event::Change => Event::CHANGE,
-            psys_host::ui2::Event::PointerDown => Event::POINTERDOWN,
-            psys_host::ui2::Event::PointerUp => Event::POINTERUP,
-            psys_host::ui2::Event::PointerMove => Event::POINTERMOVE,
+            psys_host::ui::Event::Click => Event::CLICK,
+            psys_host::ui::Event::Hover => Event::HOVER,
+            psys_host::ui::Event::Change => Event::CHANGE,
+            psys_host::ui::Event::PointerDown => Event::POINTERDOWN,
+            psys_host::ui::Event::PointerUp => Event::POINTERUP,
+            psys_host::ui::Event::PointerMove => Event::POINTERMOVE,
         }
     }
 }
@@ -217,17 +218,17 @@ enum ElementType {
     SPAN,
     P,
 }
-impl Into<ElementType> for psys_host::ui2::ElementType {
+impl Into<ElementType> for psys_host::ui::ElementType {
     fn into(self) -> ElementType {
         match self {
-            psys_host::ui2::ElementType::Button => ElementType::BUTTON,
-            psys_host::ui2::ElementType::Image => ElementType::IMAGE,
-            psys_host::ui2::ElementType::Video => ElementType::VIDEO,
-            psys_host::ui2::ElementType::Audio => ElementType::AUDIO,
-            psys_host::ui2::ElementType::Svg => ElementType::SVG,
-            psys_host::ui2::ElementType::Div => ElementType::DIV,
-            psys_host::ui2::ElementType::Span => ElementType::SPAN,
-            psys_host::ui2::ElementType::P => ElementType::P,
+            psys_host::ui::ElementType::Button => ElementType::BUTTON,
+            psys_host::ui::ElementType::Image => ElementType::IMAGE,
+            psys_host::ui::ElementType::Video => ElementType::VIDEO,
+            psys_host::ui::ElementType::Audio => ElementType::AUDIO,
+            psys_host::ui::ElementType::Svg => ElementType::SVG,
+            psys_host::ui::ElementType::Div => ElementType::DIV,
+            psys_host::ui::ElementType::Span => ElementType::SPAN,
+            psys_host::ui::ElementType::P => ElementType::P,
         }
     }
 }
@@ -251,7 +252,7 @@ impl Element {
     }
 }
 
-impl psys_host::ui2::Host for PluginCtx {
+impl psys_host::ui::Host for PluginCtx {
     fn render(&mut self, element: Resource<Element>) -> wasmtime::Result<()> {
         let el = self.table.delete(element)?;
         let json = serde_json::to_string(&el);
@@ -259,10 +260,10 @@ impl psys_host::ui2::Host for PluginCtx {
         Ok(())
     }
 }
-impl psys_host::ui2::HostElement for PluginCtx {
+impl psys_host::ui::HostElement for PluginCtx {
     fn new(
         &mut self,
-        element_type: psys_host::ui2::ElementType,
+        element_type: psys_host::ui::ElementType,
         content: Option<String>,
     ) -> wasmtime::Result<Resource<Element>> {
         let id = self
@@ -515,7 +516,7 @@ impl psys_host::ui2::HostElement for PluginCtx {
     fn on(
         &mut self,
         self_: Resource<Element>,
-        event: psys_host::ui2::Event,
+        event: psys_host::ui::Event,
         id: String,
     ) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
