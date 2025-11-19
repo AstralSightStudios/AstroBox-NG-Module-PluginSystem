@@ -3,18 +3,20 @@ use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::AppHandle;
+use tokio::sync::Mutex;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, p2};
 
 use crate::api::host::PluginCtx;
-use crate::bindings::{PsysWorld, exports::astrobox::psys_plugin};
+use crate::bindings::{PsysWorld, astrobox::psys_host, exports::astrobox::psys_plugin};
 use crate::manifest::PluginManifest;
 
 pub struct PluginState {
@@ -34,6 +36,60 @@ impl Default for PluginState {
 #[derive(Default)]
 pub struct PluginData {
     pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TransportRecvRegistration {
+    pub addr: String,
+    pub filter: psys_host::register::TransportRecvFiler,
+}
+
+#[derive(Debug, Clone)]
+pub struct InterconnectRecvRegistration {
+    pub addr: String,
+    pub pkg_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderRegistration {
+    pub name: String,
+    pub provider_type: psys_host::register::ProviderType,
+}
+
+#[derive(Default)]
+pub struct PluginRegisterState {
+    transport_recv: Mutex<Vec<TransportRecvRegistration>>,
+    interconnect_recv: Mutex<Vec<InterconnectRecvRegistration>>,
+    providers: Mutex<Vec<ProviderRegistration>>,
+    deeplink_registered: Mutex<bool>,
+}
+
+impl PluginRegisterState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub async fn register_transport_recv(&self, registration: TransportRecvRegistration) {
+        self.transport_recv.lock().await.push(registration);
+    }
+
+    pub async fn register_interconnect_recv(&self, registration: InterconnectRecvRegistration) {
+        self.interconnect_recv.lock().await.push(registration);
+    }
+
+    pub async fn register_provider(&self, registration: ProviderRegistration) {
+        self.providers.lock().await.push(registration);
+    }
+
+    pub async fn try_register_deeplink(&self) -> bool {
+        let mut guard = self.deeplink_registered.lock().await;
+        if *guard {
+            false
+        } else {
+            *guard = true;
+            true
+        }
+    }
 }
 
 const PRECOMPILE_INDEX_FILE: &str = "precompiled-index.json";
@@ -258,6 +314,7 @@ pub struct PluginRuntime {
     component: Component,
     plugin_root: PathBuf,
     app_handle: AppHandle,
+    register_state: Arc<PluginRegisterState>,
 }
 
 impl PluginRuntime {
@@ -313,6 +370,7 @@ impl PluginRuntime {
             component,
             plugin_root: path.to_path_buf(),
             app_handle,
+            register_state: Arc::new(PluginRegisterState::new()),
         })
     }
 
@@ -336,7 +394,12 @@ impl PluginRuntime {
         let wasi_ctx = self.build_wasi_ctx()?;
         Ok(Store::new(
             &self.engine,
-            PluginCtx::new(wasi_ctx, self.app_handle.clone()),
+            PluginCtx::new(
+                wasi_ctx,
+                self.app_handle.clone(),
+                self.name.clone(),
+                Arc::clone(&self.register_state),
+            ),
         ))
     }
 
