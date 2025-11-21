@@ -73,10 +73,10 @@ impl wasmtime::component::HasData for PluginCtx {
 }
 
 mod device;
+mod dialog;
 mod event;
 mod interconnect;
 mod os;
-mod picker;
 mod queue;
 mod register;
 mod thirdpartyapp;

@@ -24,6 +24,7 @@ pub mod bindings {
             "astrobox:psys-host/transport/send": async | store,
             "astrobox:psys-host/transport/request": async | store,
             "astrobox:psys-host/dialog/show-dialog": async | store,
+            "astrobox:psys-host/dialog/pick-file": async | store,
             "astrobox:psys-host/device/get-device-list": async | store,
             "astrobox:psys-host/device/get-connected-device-list": async | store,
             "astrobox:psys-host/device/disconnect-device": async | store,
@@ -32,7 +33,6 @@ pub mod bindings {
             "astrobox:psys-host/register/register-deeplink-action": async | store,
             "astrobox:psys-host/register/register-provider": async | store,
             "astrobox:psys-host/interconnect/send-qaic-message": async | store,
-            "astrobox:psys-host/picker/pick-file": async | store,
             "astrobox:psys-host/thirdpartyapp/launch-qa": async | store,
             "astrobox:psys-host/thirdpartyapp/get-thirdparty-app-list": async | store,
             default: trappable
