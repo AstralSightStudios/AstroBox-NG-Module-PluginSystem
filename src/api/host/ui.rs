@@ -5,7 +5,7 @@ use rand::{Rng, thread_rng};
 
 use anyhow::Error;
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
 use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, FutureReader, Resource};
@@ -256,6 +256,14 @@ impl psys_host::ui::Host for PluginCtx {
     fn render(&mut self, element: Resource<Element>) -> wasmtime::Result<()> {
         let el = self.table.delete(element)?;
         let json = serde_json::to_string(&el);
+
+        let _ = self.app_handle.emit(
+            "plugin-ui-render",
+            serde_json::json!({
+                "name": self.plugin_name(),
+                "ui": json.unwrap()
+            }),
+        );
 
         Ok(())
     }
