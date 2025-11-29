@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use rand::distributions::Alphanumeric;
-use rand::{Rng, thread_rng};
+use rand::distr::Alphanumeric;
+use rand::Rng;
 use serde::Serialize;
 use tauri::Emitter;
 use wasmtime::component::Resource;
@@ -79,8 +79,8 @@ impl Into<ElementType> for psys_host::ui::ElementType {
 impl Element {
     fn new(type_: ElementType, content: Option<String>) -> Self {
         Self {
-            id: thread_rng()
-                .sample_iter(&Alphanumeric)
+            id: rand::rng()
+                .sample_iter(Alphanumeric)
                 .take(16)
                 .map(char::from)
                 .collect(),
