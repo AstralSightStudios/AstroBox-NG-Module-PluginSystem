@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use rand::distr::Alphanumeric;
 use rand::Rng;
+use rand::distr::Alphanumeric;
 use serde::Serialize;
 use tauri::Emitter;
 use wasmtime::component::Resource;
