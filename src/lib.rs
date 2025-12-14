@@ -46,7 +46,8 @@ pub mod manager;
 pub mod manifest;
 pub mod plugin;
 
-type CommandFuture<'pm> = Pin<Box<dyn Future<Output = ()> + 'pm>>;
+type PluginManagerFuture<'pm, R> = Pin<Box<dyn Future<Output = R> + Send + 'pm>>;
+type CommandFuture<'pm> = Pin<Box<dyn Future<Output = ()> + Send + 'pm>>;
 enum Command {
     Exec(Box<dyn for<'pm> FnOnce(&'pm mut PluginManager) -> CommandFuture<'pm> + Send>),
 }
@@ -129,10 +130,9 @@ where
     }
 }
 
-pub async fn with_plugin_manager_async<F, Fut, R>(f: F) -> Result<R>
+pub async fn with_plugin_manager_async<F, R>(f: F) -> Result<R>
 where
-    F: FnOnce(&mut PluginManager) -> Fut + Send + 'static,
-    Fut: Future<Output = R> + Send + 'static,
+    F: for<'pm> FnOnce(&'pm mut PluginManager) -> PluginManagerFuture<'pm, R> + Send + 'static,
     R: Send + 'static,
 {
     if Some(thread::current().id()) == PLUGIN_THREAD_ID.get().copied() {
@@ -143,7 +143,7 @@ where
                     .ok_or_else(|| corelib::anyhow_site!("PluginManager TLS not set"))?
                     as *mut PluginManager;
                 // Safety: 我们当前运行在插件线程内，pm_ptr 的独占访问得到保证
-                Ok::<Fut, Error>(f(&mut *pm_ptr))
+                Ok::<PluginManagerFuture<'_, R>, Error>(f(&mut *pm_ptr))
             })
         }?;
         return Ok(fut.await);
