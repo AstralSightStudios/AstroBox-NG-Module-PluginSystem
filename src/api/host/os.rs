@@ -1,8 +1,11 @@
 use crate::bindings::astrobox::psys_host;
-use anyhow::Error;
+use anyhow::{Context, Error};
+use frontbridge::invoke_frontend;
 use wasmtime::component::{Accessor, FutureReader};
 
 use super::{HostString, PluginCtx};
+
+const FRONT_LANGUAGE_METHOD: &str = "host/os/astrobox_language";
 
 impl psys_host::os::Host for PluginCtx {}
 
@@ -39,6 +42,23 @@ impl psys_host::os::HostWithStore for PluginCtx {
         accessor: &Accessor<T, Self>,
     ) -> impl core::future::Future<Output = FutureReader<HostString>> + Send {
         make_string_future(accessor, || os_info::get().version().to_string())
+    }
+
+    fn astrobox_language<T>(
+        accessor: &Accessor<T, Self>,
+    ) -> impl core::future::Future<Output = FutureReader<HostString>> + Send {
+        let instance = accessor.instance();
+        let app_handle = accessor.with(|mut access| access.get().app_handle());
+        let future = accessor.with(|mut access| {
+            let app_handle = app_handle.clone();
+            FutureReader::new(instance, &mut access, async move {
+                let language: String = invoke_frontend(&app_handle, FRONT_LANGUAGE_METHOD, ())
+                    .await
+                    .context("invoke frontend astrobox_language")?;
+                Ok::<HostString, Error>(language.into())
+            })
+        });
+        async move { future }
     }
 }
 

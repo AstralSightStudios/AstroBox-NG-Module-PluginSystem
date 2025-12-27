@@ -56,11 +56,19 @@ pub struct ProviderRegistration {
     pub provider_type: psys_host::register::ProviderType,
 }
 
+#[derive(Debug, Clone)]
+pub struct CardRegistration {
+    pub card_type: psys_host::register::CardType,
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Default)]
 pub struct PluginRegisterState {
     transport_recv: Mutex<Vec<TransportRecvRegistration>>,
     interconnect_recv: Mutex<Vec<InterconnectRecvRegistration>>,
     providers: Mutex<Vec<ProviderRegistration>>,
+    cards: Mutex<Vec<CardRegistration>>,
     deeplink_registered: Mutex<bool>,
 }
 
@@ -79,6 +87,10 @@ impl PluginRegisterState {
 
     pub async fn register_provider(&self, registration: ProviderRegistration) {
         self.providers.lock().await.push(registration);
+    }
+
+    pub async fn register_card(&self, registration: CardRegistration) {
+        self.cards.lock().await.push(registration);
     }
 
     pub async fn try_register_deeplink(&self) -> bool {

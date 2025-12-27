@@ -1,6 +1,6 @@
 use crate::bindings::astrobox::psys_host;
 use crate::plugin::{
-    InterconnectRecvRegistration, ProviderRegistration, TransportRecvRegistration,
+    CardRegistration, InterconnectRecvRegistration, ProviderRegistration, TransportRecvRegistration,
 };
 use anyhow::Error;
 use frontbridge::invoke_frontend;
@@ -176,6 +176,48 @@ impl psys_host::register::HostWithStore for PluginCtx {
                     .register_provider(ProviderRegistration {
                         name,
                         provider_type,
+                    })
+                    .await;
+                Ok::<core::result::Result<(), ()>, Error>(Ok(()))
+            })
+        });
+        async move { future }
+    }
+
+    fn register_card<T>(
+        accessor: &Accessor<T, Self>,
+        card_type: psys_host::register::CardType,
+        id: HostString,
+        name: HostString,
+    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
+        let instance = accessor.instance();
+        let app_handle = accessor.with(|mut access| access.get().app_handle());
+        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let register_state = accessor.with(|mut access| access.get().register_state());
+        let future = accessor.with(|mut access| {
+            FutureReader::new(instance, &mut access, async move {
+                let id = id.to_string();
+                let name = name.to_string();
+                let card_label = match &card_type {
+                    psys_host::register::CardType::Element => "element",
+                    psys_host::register::CardType::Text => "text",
+                };
+                let params = json!({
+                    "plugin": plugin_name,
+                    "type": card_label,
+                    "id": id.clone(),
+                    "name": name.clone(),
+                });
+
+                if !request_permission(&app_handle, "register_card", params).await? {
+                    return Ok(Err(()));
+                }
+
+                register_state
+                    .register_card(CardRegistration {
+                        card_type,
+                        id,
+                        name,
                     })
                     .await;
                 Ok::<core::result::Result<(), ()>, Error>(Ok(()))

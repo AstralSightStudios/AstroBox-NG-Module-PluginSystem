@@ -110,6 +110,39 @@ impl psys_host::ui::Host for PluginCtx {
 
         Ok(())
     }
+
+    fn render_to_element_card(
+        &mut self,
+        id: String,
+        element: Resource<Element>,
+    ) -> wasmtime::Result<()> {
+        let el = self.table.delete(element)?;
+        let json = serde_json::to_string(&el);
+
+        let _ = self.app_handle.emit(
+            "plugin-ui-render-to-element-card",
+            serde_json::json!({
+                "name": self.plugin_name(),
+                "id": id,
+                "ui": json.unwrap()
+            }),
+        );
+
+        Ok(())
+    }
+
+    fn render_to_text_card(&mut self, id: String, text: String) -> wasmtime::Result<()> {
+        let _ = self.app_handle.emit(
+            "plugin-ui-render-to-text-card",
+            serde_json::json!({
+                "name": self.plugin_name(),
+                "id": id,
+                "text": text
+            }),
+        );
+
+        Ok(())
+    }
 }
 impl psys_host::ui::HostElement for PluginCtx {
     fn new(
