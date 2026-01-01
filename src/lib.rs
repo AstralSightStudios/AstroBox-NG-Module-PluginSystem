@@ -1,9 +1,10 @@
 use anyhow::{Error, Result};
 use manager::PluginManager;
-use once_cell::sync::OnceCell;
+use once_cell::sync::{Lazy, OnceCell};
 use std::future::Future;
 use std::pin::Pin;
 use std::{cell::RefCell, path::PathBuf, thread};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
@@ -52,7 +53,7 @@ pub mod plugin;
 pub const PLUGINSYSTEM_READY_EVENT: &str = "astrobox://pluginsystem/ready";
 pub const PLUGINSYSTEM_PROGRESS_EVENT: &str = "astrobox://pluginsystem/progress";
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct PluginSystemReadyPayload {
     ok: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -73,11 +74,38 @@ enum Command {
     Exec(Box<dyn for<'pm> FnOnce(&'pm mut PluginManager) -> CommandFuture<'pm> + Send>),
 }
 static PLUGIN_TX: OnceCell<mpsc::UnboundedSender<Command>> = OnceCell::new();
+static PLUGINSYSTEM_INIT_STATE: Lazy<Mutex<Option<PluginSystemReadyPayload>>> =
+    Lazy::new(|| Mutex::new(None));
 
 thread_local! {
     static PM_IN_THREAD: RefCell<Option<*mut PluginManager>> = const { RefCell::new(None) };
 }
 static PLUGIN_THREAD_ID: OnceCell<thread::ThreadId> = OnceCell::new();
+
+fn store_init_state(payload: &PluginSystemReadyPayload) {
+    let mut guard = PLUGINSYSTEM_INIT_STATE
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    *guard = Some(payload.clone());
+}
+
+pub fn emit_last_init_state(app_handle: &AppHandle) -> bool {
+    let payload = {
+        let guard = PLUGINSYSTEM_INIT_STATE
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        guard.clone()
+    };
+
+    if let Some(payload) = payload {
+        if let Err(err) = app_handle.emit(PLUGINSYSTEM_READY_EVENT, &payload) {
+            log::error!("Failed to emit plugin system init event: {err}");
+        }
+        return true;
+    }
+
+    false
+}
 
 pub fn init(dir: PathBuf, app_handle: AppHandle) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Command>();
@@ -95,6 +123,7 @@ pub fn init(dir: PathBuf, app_handle: AppHandle) -> Result<()> {
                     ok: false,
                     errors: vec![format!("Failed to build plugin runtime: {e}")],
                 };
+                store_init_state(&payload);
                 if let Err(err) = app_handle.emit(PLUGINSYSTEM_READY_EVENT, &payload) {
                     log::error!("Failed to emit plugin system init event: {err}");
                 }
@@ -130,6 +159,7 @@ pub fn init(dir: PathBuf, app_handle: AppHandle) -> Result<()> {
                 },
             };
 
+            store_init_state(&payload);
             if let Err(err) = app_handle_for_event.emit(PLUGINSYSTEM_READY_EVENT, &payload) {
                 log::error!("Failed to emit plugin system init event: {err}");
             }
