@@ -1,14 +1,10 @@
 use crate::bindings::astrobox::psys_host;
 use anyhow::{Error, anyhow};
 use corelib::{
-    device::xiaomi::{
-        XiaomiDevice,
-        components::{
-            resource::ResourceComponent,
-            thirdparty_app::{AppInfo, ThirdpartyAppComponent, ThirdpartyAppSystem},
-        },
+    device::xiaomi::components::{
+        resource::ResourceComponent,
+        thirdparty_app::{AppInfo, ThirdpartyAppSystem},
     },
-    ecs::{entity::EntityExt, logic_component::LogicComponent},
 };
 use log::error;
 use wasmtime::component::{Accessor, FutureReader};
@@ -57,13 +53,13 @@ async fn resolve_app_info(device_addr: &str, pkg_name: &str) -> Result<AppInfo, 
     let device_addr = device_addr.to_string();
     let pkg_name = pkg_name.to_string();
     corelib::ecs::with_rt_mut(move |rt| -> Result<AppInfo, Error> {
-        let dev = rt
-            .find_entity_by_id_mut::<XiaomiDevice>(&device_addr)
+        let entity = rt
+            .device_entity(&device_addr)
             .ok_or_else(|| anyhow!("Device not found: {}", device_addr))?;
-
-        let resource_comp = dev
-            .get_component_as_mut::<ResourceComponent>(ResourceComponent::ID)
-            .map_err(|err| anyhow!("Resource component unavailable: {:?}", err))?;
+        let resource_comp = rt
+            .world()
+            .get::<ResourceComponent>(entity)
+            .ok_or_else(|| anyhow!("Resource component unavailable: {}", device_addr))?;
 
         resource_comp
             .quick_apps
@@ -84,22 +80,14 @@ async fn dispatch_message(
     payload: Vec<u8>,
 ) -> Result<(), Error> {
     corelib::ecs::with_rt_mut(move |rt| -> Result<(), Error> {
-        let dev = rt
-            .find_entity_by_id_mut::<XiaomiDevice>(&device_addr)
-            .ok_or_else(|| anyhow!("Device not found: {}", device_addr))?;
-
-        let component = dev
-            .get_component_as_mut::<ThirdpartyAppComponent>(ThirdpartyAppComponent::ID)
-            .map_err(|err| anyhow!("ThirdpartyApp component unavailable: {:?}", err))?;
-
-        let system = component
-            .system_mut()
-            .as_any_mut()
-            .downcast_mut::<ThirdpartyAppSystem>()
-            .ok_or_else(|| anyhow!("ThirdpartyApp system not found on {}", device_addr))?;
-
-        system.send_phone_message(&app_info, payload);
-        Ok(())
+        rt.with_device_mut(&device_addr, |world, entity| {
+            let mut system = world
+                .get_mut::<ThirdpartyAppSystem>(entity)
+                .ok_or_else(|| anyhow!("ThirdpartyApp system not found on {}", device_addr))?;
+            system.send_phone_message(&app_info, payload);
+            Ok(())
+        })
+        .ok_or_else(|| anyhow!("Device not found: {}", device_addr))?
     })
     .await
 }

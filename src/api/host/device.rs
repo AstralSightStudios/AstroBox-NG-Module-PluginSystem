@@ -1,5 +1,6 @@
 use crate::bindings::astrobox::psys_host;
 use anyhow::{Context, Error};
+use corelib::device::xiaomi::XiaomiDevice;
 use frontbridge::invoke_frontend;
 use serde::Deserialize;
 use tauri::Manager;
@@ -63,20 +64,15 @@ impl psys_host::device::HostWithStore for PluginCtx {
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {
                 let ret = corelib::ecs::with_rt_mut(|rt| {
-                    let mut ret = Vec::new();
-
-                    rt.entities.values_mut().for_each(|dev| {
-                        if let Some(device) =
-                            dev.as_any_mut().downcast_mut::<corelib::device::Device>()
-                        {
-                            ret.push(psys_host::device::DeviceInfo {
-                                addr: device.addr().to_string(),
-                                name: device.name().to_string(),
-                            });
-                        }
-                    });
-
-                    ret
+                    rt.device_ids()
+                        .filter_map(|device_id| {
+                            rt.component_ref::<XiaomiDevice>(device_id.as_str())
+                                .map(|device| psys_host::device::DeviceInfo {
+                                    addr: device.addr().to_string(),
+                                    name: device.name().to_string(),
+                                })
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .await;
                 Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(ret)
