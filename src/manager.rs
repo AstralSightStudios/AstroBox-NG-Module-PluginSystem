@@ -9,7 +9,7 @@ use zip::ZipArchive;
 
 use crate::manifest::PluginManifest;
 use crate::{PLUGINSYSTEM_PROGRESS_EVENT, PluginSystemProgressPayload};
-use crate::plugin::{Plugin, PluginData, purge_precompiled_component};
+use crate::plugin::{CardRegistration, Plugin, PluginData, purge_precompiled_component};
 
 pub struct PluginManager {
     plugin_root: PathBuf,
@@ -312,6 +312,14 @@ impl PluginManager {
 
     pub fn get(&mut self, name: &str) -> Option<&mut Plugin> {
         self.plugins.get_mut(name)
+    }
+
+    pub async fn list_cards(&self) -> Vec<CardRegistration> {
+        let mut cards = Vec::new();
+        for plugin in self.plugins.values() {
+            cards.extend(plugin.runtime.list_cards().await);
+        }
+        cards
     }
 
     pub fn list(&self) -> Vec<PluginManifest> {

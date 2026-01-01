@@ -94,6 +94,10 @@ impl PluginRegisterState {
         self.cards.lock().await.push(registration);
     }
 
+    pub async fn list_cards(&self) -> Vec<CardRegistration> {
+        self.cards.lock().await.clone()
+    }
+
     pub async fn try_register_deeplink(&self) -> bool {
         let mut guard = self.deeplink_registered.lock().await;
         if *guard {
@@ -529,6 +533,10 @@ impl PluginRuntime {
         registrations
             .iter()
             .any(|reg| reg.addr == addr && reg.pkg_name == pkg_name)
+    }
+
+    pub async fn list_cards(&self) -> Vec<CardRegistration> {
+        self.register_state.list_cards().await
     }
 }
 
