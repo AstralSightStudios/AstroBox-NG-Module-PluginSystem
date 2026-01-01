@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
@@ -18,6 +18,7 @@ use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, p2};
 use crate::api::host::PluginCtx;
 use crate::bindings::{PsysWorld, astrobox::psys_host, exports::astrobox::psys_plugin};
 use crate::manifest::PluginManifest;
+use crate::{PLUGINSYSTEM_PROGRESS_EVENT, PluginSystemProgressPayload};
 
 pub struct PluginState {
     pub disabled: bool,
@@ -319,6 +320,22 @@ fn create_engine() -> Result<Engine> {
     Engine::new(&config).context("Failed to initialize the Wasmtime engine")
 }
 
+fn emit_pluginsystem_progress(
+    app_handle: &AppHandle,
+    plugin: &str,
+    stage: &str,
+    detail: Option<String>,
+) {
+    let payload = PluginSystemProgressPayload {
+        plugin: plugin.to_string(),
+        stage: stage.to_string(),
+        detail,
+    };
+    if let Err(err) = app_handle.emit(PLUGINSYSTEM_PROGRESS_EVENT, &payload) {
+        log::error!("Failed to emit plugin progress event: {err}");
+    }
+}
+
 #[derive(Clone)]
 pub struct PluginRuntime {
     name: String,
@@ -330,6 +347,10 @@ pub struct PluginRuntime {
 }
 
 impl PluginRuntime {
+    fn emit_progress(&self, stage: &str, detail: Option<String>) {
+        emit_pluginsystem_progress(&self.app_handle, &self.name, stage, detail);
+    }
+
     pub fn initialise(
         path: &Path,
         manifest: &PluginManifest,
@@ -431,11 +452,14 @@ impl PluginRuntime {
 
     pub async fn run(&self) -> Result<()> {
         log::info!("Creating store for plugin {}...", self.name.clone());
+        self.emit_progress("create_store", None);
         let mut store = self.create_store()?;
         log::info!("Building linker for plugin {}...", self.name.clone());
+        self.emit_progress("build_linker", None);
         let linker = self.build_linker()?;
 
         log::info!("Instantiating world for plugin {}...", self.name.clone());
+        self.emit_progress("instantiate", None);
         let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
             .await
             .map_err(|e| {
@@ -446,6 +470,7 @@ impl PluginRuntime {
             })?;
 
         log::info!("Calling on_load for plugin {}...", self.name.clone());
+        self.emit_progress("on_load", None);
         let lifecycle = instance.astrobox_psys_plugin_lifecycle();
         lifecycle
             .call_on_load(&mut store)
@@ -489,6 +514,21 @@ impl PluginRuntime {
     pub async fn dispatch_plugin_message(&self, payload: String) -> Result<()> {
         self.dispatch_event(psys_plugin::event::EventType::PluginMessage, payload)
             .await
+    }
+
+    pub async fn dispatch_interconnect_message(&self, payload: String) -> Result<()> {
+        self.dispatch_event(
+            psys_plugin::event::EventType::InterconnectMessage,
+            payload,
+        )
+        .await
+    }
+
+    pub async fn matches_interconnect(&self, addr: &str, pkg_name: &str) -> bool {
+        let registrations = self.register_state.interconnect_recv.lock().await;
+        registrations
+            .iter()
+            .any(|reg| reg.addr == addr && reg.pkg_name == pkg_name)
     }
 }
 

@@ -4,10 +4,11 @@ use std::fs::{self, File};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use zip::ZipArchive;
 
 use crate::manifest::PluginManifest;
+use crate::{PLUGINSYSTEM_PROGRESS_EVENT, PluginSystemProgressPayload};
 use crate::plugin::{Plugin, PluginData, purge_precompiled_component};
 
 pub struct PluginManager {
@@ -18,6 +19,20 @@ pub struct PluginManager {
 }
 
 impl PluginManager {
+    fn emit_progress(&self, plugin: &str, stage: &str, detail: Option<String>) {
+        let payload = PluginSystemProgressPayload {
+            plugin: plugin.to_string(),
+            stage: stage.to_string(),
+            detail,
+        };
+        if let Err(err) = self
+            .app_handle
+            .emit(PLUGINSYSTEM_PROGRESS_EVENT, &payload)
+        {
+            log::error!("Failed to emit plugin progress event: {err}");
+        }
+    }
+
     pub fn new(root: PathBuf, app_handle: AppHandle) -> Self {
         Self {
             plugin_root: root,
@@ -28,6 +43,11 @@ impl PluginManager {
     }
 
     pub async fn add(&mut self, path: &Path) -> Result<()> {
+        let dir_label = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("unknown-plugin");
+        self.emit_progress(dir_label, "load", None);
         log::info!(
             "Loading plugin from path {}",
             path.to_string_lossy().to_string()
@@ -36,40 +56,66 @@ impl PluginManager {
         let name = plugin.manifest.name.clone();
 
         self.plugins.insert(name.clone(), plugin);
+        self.emit_progress(&name, "loaded", None);
         log::info!("Plugin {} loaded!", name);
         Ok(())
     }
 
-    pub async fn start_all(&mut self) {
+    pub async fn start_all(&mut self) -> Vec<String> {
         let mut names: Vec<String> = self.plugins.keys().cloned().collect();
         names.sort();
+        let mut errors = Vec::new();
 
         for name in names {
             if let Err(err) = self.start_plugin(&name).await {
                 log::error!("Failed to start plugin {}: {err}", name);
+                errors.push(err.to_string());
             }
         }
+
+        errors
     }
 
     pub async fn start_plugin(&mut self, name: &str) -> Result<()> {
         let mut should_remove = false;
+        let app_handle = self.app_handle.clone();
+        let emit_progress =
+            |plugin: &str, stage: &str, detail: Option<String>| {
+                let payload = PluginSystemProgressPayload {
+                    plugin: plugin.to_string(),
+                    stage: stage.to_string(),
+                    detail,
+                };
+                if let Err(err) =
+                    app_handle.emit(PLUGINSYSTEM_PROGRESS_EVENT, &payload)
+                {
+                    log::error!("Failed to emit plugin progress event: {err}");
+                }
+            };
 
         let result = match self.plugins.get_mut(name) {
             Some(plugin) => {
                 if plugin.state.disabled {
                     log::info!("Plugin {} is disabled, skip starting", name);
+                    emit_progress(name, "disabled", None);
                     return Ok(());
                 }
 
                 if plugin.state.loaded {
+                    emit_progress(name, "ready", None);
                     return Ok(());
                 }
 
+                emit_progress(name, "start", None);
                 match plugin.run().await {
-                    Ok(()) => Ok(()),
+                    Ok(()) => {
+                        emit_progress(name, "ready", None);
+                        Ok(())
+                    }
                     Err(err) => {
                         should_remove = true;
                         plugin.stop();
+                        emit_progress(name, "error", Some(err.to_string()));
                         Err(anyhow::anyhow!(
                             "plugin '{}' on_load failed. detail: {}",
                             name,
@@ -156,6 +202,36 @@ impl PluginManager {
         false
     }
 
+    pub async fn dispatch_interconnect_message(
+        &mut self,
+        addr: &str,
+        pkg_name: &str,
+        payload: String,
+    ) {
+        let active_plugins = self
+            .plugins
+            .iter()
+            .filter(|(_, plugin)| plugin.state.loaded && !plugin.state.disabled)
+            .map(|(name, plugin)| (name.clone(), plugin.runtime.clone()))
+            .collect::<Vec<_>>();
+
+        for (name, runtime) in active_plugins {
+            if !runtime.matches_interconnect(addr, pkg_name).await {
+                continue;
+            }
+
+            if let Err(err) = runtime
+                .dispatch_interconnect_message(payload.clone())
+                .await
+            {
+                log::error!(
+                    "Failed to deliver interconnect message to {}: {err}",
+                    name
+                );
+            }
+        }
+    }
+
     pub fn disable(&mut self, name: &String) -> bool {
         log::info!("Disable plugin {}", name);
         self.updated = true;
@@ -195,20 +271,31 @@ impl PluginManager {
         }
     }
 
-    pub async fn load_from_dir(&mut self) -> Result<()> {
+    pub async fn load_from_dir(&mut self) -> Result<Vec<String>> {
         fs::create_dir_all(&self.plugin_root)?;
+        let mut errors = Vec::new();
 
         for entry in fs::read_dir(&self.plugin_root)? {
             let entry = entry?;
             let path = entry.path();
             if path.is_dir() {
                 if let Err(e) = self.add(&path).await {
-                    log::error!("Failed to load plugin: {:?} error: {:?}", path, e);
+                    let detail = format!(
+                        "Failed to load plugin from {}: {e}",
+                        path.to_string_lossy()
+                    );
+                    log::error!("{detail}");
+                    let label = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("unknown-plugin");
+                    self.emit_progress(label, "error", Some(detail.clone()));
+                    errors.push(detail);
                 }
             }
         }
-        self.start_all().await;
-        Ok(())
+        errors.extend(self.start_all().await);
+        Ok(errors)
     }
 
     pub fn set_plugin_data<F>(&mut self, name: &str, f: F) -> Result<()>

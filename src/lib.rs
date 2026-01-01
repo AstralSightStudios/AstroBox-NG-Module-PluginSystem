@@ -4,7 +4,8 @@ use once_cell::sync::OnceCell;
 use std::future::Future;
 use std::pin::Pin;
 use std::{cell::RefCell, path::PathBuf, thread};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
+use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 
 pub mod api;
@@ -48,6 +49,24 @@ pub mod manager;
 pub mod manifest;
 pub mod plugin;
 
+pub const PLUGINSYSTEM_READY_EVENT: &str = "astrobox://pluginsystem/ready";
+pub const PLUGINSYSTEM_PROGRESS_EVENT: &str = "astrobox://pluginsystem/progress";
+
+#[derive(Debug, Serialize)]
+struct PluginSystemReadyPayload {
+    ok: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    errors: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct PluginSystemProgressPayload {
+    pub plugin: String,
+    pub stage: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
 type PluginManagerFuture<'pm, R> = Pin<Box<dyn Future<Output = R> + Send + 'pm>>;
 type CommandFuture<'pm> = Pin<Box<dyn Future<Output = ()> + Send + 'pm>>;
 enum Command {
@@ -72,12 +91,20 @@ pub fn init(dir: PathBuf, app_handle: AppHandle) -> Result<()> {
             Ok(rt) => rt,
             Err(e) => {
                 log::error!("Failed to build runtime: {e}");
+                let payload = PluginSystemReadyPayload {
+                    ok: false,
+                    errors: vec![format!("Failed to build plugin runtime: {e}")],
+                };
+                if let Err(err) = app_handle.emit(PLUGINSYSTEM_READY_EVENT, &payload) {
+                    log::error!("Failed to emit plugin system init event: {err}");
+                }
                 return;
             }
         };
 
         let dir_cl = dir.clone();
         runtime.block_on(async move {
+            let app_handle_for_event = app_handle.clone();
             let mut pm = PluginManager::new(dir, app_handle);
 
             tokio::task::block_in_place(|| {
@@ -91,7 +118,23 @@ pub fn init(dir: PathBuf, app_handle: AppHandle) -> Result<()> {
                 "Loading plugins from dir {}",
                 dir_cl.to_string_lossy().to_string()
             );
-            if let Err(e) = pm.load_from_dir().await {
+            let init_report = pm.load_from_dir().await;
+            let payload = match init_report {
+                Ok(ref errors) => PluginSystemReadyPayload {
+                    ok: errors.is_empty(),
+                    errors: errors.clone(),
+                },
+                Err(ref err) => PluginSystemReadyPayload {
+                    ok: false,
+                    errors: vec![err.to_string()],
+                },
+            };
+
+            if let Err(err) = app_handle_for_event.emit(PLUGINSYSTEM_READY_EVENT, &payload) {
+                log::error!("Failed to emit plugin system init event: {err}");
+            }
+
+            if let Err(e) = init_report {
                 log::error!("PluginManager init failed: {e}");
                 return;
             }
