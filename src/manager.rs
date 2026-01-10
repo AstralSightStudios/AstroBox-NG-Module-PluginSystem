@@ -209,7 +209,7 @@ impl PluginManager {
         result
     }
 
-    pub async fn add_from_abp(&mut self, name: &String, path: &String) -> Result<()> {
+    pub async fn add_from_abp(&mut self, name: &str, path: &Path) -> Result<()> {
         self.updated = true;
         let package_raw = tokio::fs::read(path).await?;
         let reader = Cursor::new(package_raw);
