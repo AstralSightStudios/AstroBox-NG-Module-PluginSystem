@@ -1,4 +1,6 @@
 use anyhow::Result;
+use frontbridge::invoke_frontend;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Cursor;
@@ -16,6 +18,26 @@ pub struct PluginManager {
     app_handle: AppHandle,
     pub plugins: HashMap<String, Plugin>,
     pub updated: bool,
+}
+
+const FRONT_STORAGE_GET_JSON_METHOD: &str = "host/storage/local/get_json";
+const FRONT_STORAGE_SET_JSON_METHOD: &str = "host/storage/local/set_json";
+const PLUGIN_DISABLED_STORAGE_KEY: &str = "astrobox.plugin.disabled_map";
+
+#[derive(Serialize)]
+struct LocalStorageKeyPayload {
+    key: String,
+}
+
+#[derive(Serialize)]
+struct LocalStorageSetPayload<T> {
+    key: String,
+    value: T,
+}
+
+#[derive(Deserialize)]
+struct LocalStorageAck {
+    success: bool,
 }
 
 impl PluginManager {
@@ -74,6 +96,59 @@ impl PluginManager {
         }
 
         errors
+    }
+
+    async fn load_disabled_map(&self) -> std::collections::HashMap<String, bool> {
+        let payload = LocalStorageKeyPayload {
+            key: PLUGIN_DISABLED_STORAGE_KEY.to_string(),
+        };
+        match invoke_frontend::<Option<std::collections::HashMap<String, bool>>, _>(
+            &self.app_handle,
+            FRONT_STORAGE_GET_JSON_METHOD,
+            payload,
+        )
+        .await
+        {
+            Ok(Some(map)) => map,
+            Ok(None) => std::collections::HashMap::new(),
+            Err(err) => {
+                log::warn!("[pluginsystem] failed to load disabled map: {err}");
+                std::collections::HashMap::new()
+            }
+        }
+    }
+
+    async fn store_disabled_map(&self, map: &std::collections::HashMap<String, bool>) {
+        let payload = LocalStorageSetPayload {
+            key: PLUGIN_DISABLED_STORAGE_KEY.to_string(),
+            value: map,
+        };
+        match invoke_frontend::<LocalStorageAck, _>(
+            &self.app_handle,
+            FRONT_STORAGE_SET_JSON_METHOD,
+            payload,
+        )
+        .await
+        {
+            Ok(resp) => {
+                if !resp.success {
+                    log::warn!("[pluginsystem] store disabled map rejected");
+                }
+            }
+            Err(err) => {
+                log::warn!("[pluginsystem] failed to store disabled map: {err}");
+            }
+        }
+    }
+
+    async fn set_plugin_disabled_persisted(&self, name: &str, disabled: bool) {
+        let mut map = self.load_disabled_map().await;
+        if disabled {
+            map.insert(name.to_string(), true);
+        } else {
+            map.remove(name);
+        }
+        self.store_disabled_map(&map).await;
     }
 
     pub async fn start_plugin(&mut self, name: &str) -> Result<()> {
@@ -171,6 +246,7 @@ impl PluginManager {
         }
 
         self.add(&dest_dir).await?;
+        self.set_plugin_disabled_persisted(name, false).await;
         self.start_plugin(name).await?;
 
         Ok(())
@@ -182,6 +258,7 @@ impl PluginManager {
         if let Some(plugin) = self.plugins.get_mut(name) {
             if plugin.state.loaded && !plugin.state.disabled {
                 log::info!("Plugin {} already enabled", name);
+                self.set_plugin_disabled_persisted(name, false).await;
                 return true;
             }
 
@@ -190,6 +267,7 @@ impl PluginManager {
             match plugin.run().await {
                 Ok(()) => {
                     log::info!("Enable successful");
+                    self.set_plugin_disabled_persisted(name, false).await;
                     return true;
                 }
                 Err(err) => {
@@ -232,20 +310,21 @@ impl PluginManager {
         }
     }
 
-    pub fn disable(&mut self, name: &String) -> bool {
+    pub async fn disable(&mut self, name: &String) -> bool {
         log::info!("Disable plugin {}", name);
         self.updated = true;
         match self.plugins.get_mut(name) {
             Some(plug) => {
                 plug.stop();
                 log::info!("Disable successful");
+                self.set_plugin_disabled_persisted(name, true).await;
                 true
             }
             None => false,
         }
     }
 
-    pub fn remove(&mut self, name: &String) -> bool {
+    pub async fn remove(&mut self, name: &String) -> bool {
         self.updated = true;
         let plugin = match self.plugins.remove(name) {
             Some(plugin) => plugin,
@@ -263,7 +342,10 @@ impl PluginManager {
         }
 
         match fs::remove_dir_all(&plugin.path) {
-            Ok(_) => true,
+            Ok(_) => {
+                self.set_plugin_disabled_persisted(name, false).await;
+                true
+            }
             Err(e) => {
                 log::error!("Failed to remove plugin: {:?} error: {:?}", name, e);
                 false
@@ -292,6 +374,13 @@ impl PluginManager {
                     self.emit_progress(label, "error", Some(detail.clone()));
                     errors.push(detail);
                 }
+            }
+        }
+        let disabled_map = self.load_disabled_map().await;
+        for (name, plugin) in self.plugins.iter_mut() {
+            let disabled = disabled_map.get(name).copied().unwrap_or(false);
+            if disabled {
+                plugin.state.disabled = true;
             }
         }
         errors.extend(self.start_all().await);
