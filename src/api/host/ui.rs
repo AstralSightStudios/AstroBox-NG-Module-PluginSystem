@@ -147,9 +147,35 @@ impl psys_host::ui::HostElement for PluginCtx {
         Ok(self_)
     }
 
+    fn background(
+        &mut self,
+        self_: Resource<Element>,
+        bg: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("background", bg);
+        Ok(self_)
+    }
+
     fn flex(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
         let _ = el.styles.insert("display", "flex".to_string());
+        Ok(self_)
+    }
+
+    fn flex_direction(
+        &mut self,
+        self_: Resource<Element>,
+        direction: psys_host::ui::FlexDirection,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let value = match direction {
+            psys_host::ui::FlexDirection::Row => "row",
+            psys_host::ui::FlexDirection::Column => "column",
+            psys_host::ui::FlexDirection::RowReverse => "row-reverse",
+            psys_host::ui::FlexDirection::ColumnReverse => "column-reverse",
+        };
+        let _ = el.styles.insert("flex-direction", value.to_string());
         Ok(self_)
     }
 
@@ -328,6 +354,20 @@ impl psys_host::ui::HostElement for PluginCtx {
         Ok(self_)
     }
 
+    fn width_full(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        el.width = None;
+        let _ = el.styles.insert("width", "100%".to_string());
+        Ok(self_)
+    }
+
+    fn width_half(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        el.width = None;
+        let _ = el.styles.insert("width", "50%".to_string());
+        Ok(self_)
+    }
+
     fn height(
         &mut self,
         self_: Resource<Element>,
@@ -336,6 +376,20 @@ impl psys_host::ui::HostElement for PluginCtx {
         let el = self.table.get_mut(&self_)?;
         el.height = Some(height);
         let _ = el.styles.insert("height", format!("{}px", height));
+        Ok(self_)
+    }
+
+    fn height_full(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        el.height = None;
+        let _ = el.styles.insert("height", "100%".to_string());
+        Ok(self_)
+    }
+
+    fn height_half(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        el.height = None;
+        let _ = el.styles.insert("height", "50%".to_string());
         Ok(self_)
     }
 

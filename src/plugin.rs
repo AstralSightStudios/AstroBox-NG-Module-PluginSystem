@@ -515,6 +515,65 @@ impl PluginRuntime {
         Ok(())
     }
 
+    pub async fn dispatch_ui_render(&self, element_id: String) -> Result<()> {
+        let mut store = self.create_store()?;
+        let linker = self.build_linker()?;
+
+        let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to instantiate plugin component for ui render. detail: {}",
+                    e.to_string()
+                )
+            })?;
+
+        let event_iface = instance.astrobox_psys_plugin_event();
+        let mut future = event_iface
+            .call_on_ui_render(&mut store, element_id.as_str())
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to start the plugin on-ui-render callback. detail: {}",
+                    e.to_string()
+                )
+            })?;
+        future.close(&mut store);
+        Ok(())
+    }
+
+    pub async fn dispatch_ui_event(
+        &self,
+        event_id: String,
+        event: psys_host::ui::Event,
+        payload: String,
+    ) -> Result<()> {
+        let mut store = self.create_store()?;
+        let linker = self.build_linker()?;
+
+        let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to instantiate plugin component for ui event. detail: {}",
+                    e.to_string()
+                )
+            })?;
+
+        let event_iface = instance.astrobox_psys_plugin_event();
+        let mut future = event_iface
+            .call_on_ui_event(&mut store, event_id.as_str(), event, payload.as_str())
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to start the plugin on-ui-event callback. detail: {}",
+                    e.to_string()
+                )
+            })?;
+        future.close(&mut store);
+        Ok(())
+    }
+
     pub async fn dispatch_plugin_message(&self, payload: String) -> Result<()> {
         self.dispatch_event(psys_plugin::event::EventType::PluginMessage, payload)
             .await
