@@ -171,16 +171,6 @@ impl psys_host::ui::HostElement for PluginCtx {
         return_owned_element(self, self_)
     }
 
-    fn background(
-        &mut self,
-        self_: Resource<Element>,
-        bg: String,
-    ) -> wasmtime::Result<Resource<Element>> {
-        let el = self.table.get_mut(&self_)?;
-        let _ = el.styles.insert("background", bg);
-        return_owned_element(self, self_)
-    }
-
     fn flex(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
         let _ = el.styles.insert("display", "flex".to_string());
