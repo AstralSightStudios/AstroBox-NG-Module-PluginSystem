@@ -348,6 +348,12 @@ pub struct PluginRuntime {
     plugin_root: PathBuf,
     app_handle: AppHandle,
     register_state: Arc<PluginRegisterState>,
+    instance: Arc<Mutex<Option<PluginInstance>>>,
+}
+
+struct PluginInstance {
+    store: Store<PluginCtx>,
+    world: PsysWorld,
 }
 
 impl PluginRuntime {
@@ -408,6 +414,7 @@ impl PluginRuntime {
             plugin_root: path.to_path_buf(),
             app_handle,
             register_state: Arc::new(PluginRegisterState::new()),
+            instance: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -464,6 +471,10 @@ impl PluginRuntime {
 
         log::info!("Instantiating world for plugin {}...", self.name.clone());
         self.emit_progress("instantiate", None);
+        {
+            let mut guard = self.instance.lock().await;
+            *guard = None;
+        }
         let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
             .await
             .map_err(|e| {
@@ -481,6 +492,11 @@ impl PluginRuntime {
             .await
             .context("Failed to execute the plugin on-load callback")?;
 
+        {
+            let mut guard = self.instance.lock().await;
+            *guard = Some(PluginInstance { store, world: instance });
+        }
+
         Ok(())
     }
 
@@ -489,21 +505,13 @@ impl PluginRuntime {
         event_type: psys_plugin::event::EventType,
         payload: String,
     ) -> Result<()> {
-        let mut store = self.create_store()?;
-        let linker = self.build_linker()?;
-
-        let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to instantiate plugin component for event dispatch. detail: {}",
-                    e.to_string()
-                )
-            })?;
-
-        let event_iface = instance.astrobox_psys_plugin_event();
+        let mut guard = self.instance.lock().await;
+        let instance = guard.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name)
+        })?;
+        let event_iface = instance.world.astrobox_psys_plugin_event();
         let mut future = event_iface
-            .call_on_event(&mut store, event_type, payload.as_str())
+            .call_on_event(&mut instance.store, event_type, payload.as_str())
             .await
             .map_err(|e| {
                 anyhow::anyhow!(
@@ -511,26 +519,18 @@ impl PluginRuntime {
                     e.to_string()
                 )
             })?;
-        future.close(&mut store);
+        future.close(&mut instance.store);
         Ok(())
     }
 
     pub async fn dispatch_ui_render(&self, element_id: String) -> Result<()> {
-        let mut store = self.create_store()?;
-        let linker = self.build_linker()?;
-
-        let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to instantiate plugin component for ui render. detail: {}",
-                    e.to_string()
-                )
-            })?;
-
-        let event_iface = instance.astrobox_psys_plugin_event();
+        let mut guard = self.instance.lock().await;
+        let instance = guard.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name)
+        })?;
+        let event_iface = instance.world.astrobox_psys_plugin_event();
         let mut future = event_iface
-            .call_on_ui_render(&mut store, element_id.as_str())
+            .call_on_ui_render(&mut instance.store, element_id.as_str())
             .await
             .map_err(|e| {
                 anyhow::anyhow!(
@@ -538,7 +538,7 @@ impl PluginRuntime {
                     e.to_string()
                 )
             })?;
-        future.close(&mut store);
+        future.close(&mut instance.store);
         Ok(())
     }
 
@@ -548,21 +548,18 @@ impl PluginRuntime {
         event: psys_host::ui::Event,
         payload: String,
     ) -> Result<()> {
-        let mut store = self.create_store()?;
-        let linker = self.build_linker()?;
-
-        let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to instantiate plugin component for ui event. detail: {}",
-                    e.to_string()
-                )
-            })?;
-
-        let event_iface = instance.astrobox_psys_plugin_event();
+        let mut guard = self.instance.lock().await;
+        let instance = guard.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name)
+        })?;
+        let event_iface = instance.world.astrobox_psys_plugin_event();
         let mut future = event_iface
-            .call_on_ui_event(&mut store, event_id.as_str(), event, payload.as_str())
+            .call_on_ui_event(
+                &mut instance.store,
+                event_id.as_str(),
+                event,
+                payload.as_str(),
+            )
             .await
             .map_err(|e| {
                 anyhow::anyhow!(
@@ -570,7 +567,7 @@ impl PluginRuntime {
                     e.to_string()
                 )
             })?;
-        future.close(&mut store);
+        future.close(&mut instance.store);
         Ok(())
     }
 
@@ -596,6 +593,11 @@ impl PluginRuntime {
 
     pub async fn list_cards(&self) -> Vec<CardRegistration> {
         self.register_state.list_cards().await
+    }
+
+    pub async fn clear_instance(&self) {
+        let mut guard = self.instance.lock().await;
+        *guard = None;
     }
 }
 
@@ -640,7 +642,8 @@ impl Plugin {
         Ok(())
     }
 
-    pub fn stop(&mut self) {
+    pub async fn stop(&mut self) {
+        self.runtime.clear_instance().await;
         self.state.disabled = true;
         self.state.loaded = false;
     }

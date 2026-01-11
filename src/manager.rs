@@ -189,7 +189,7 @@ impl PluginManager {
                     }
                     Err(err) => {
                         should_remove = true;
-                        plugin.stop();
+                        plugin.stop().await;
                         emit_progress(name, "error", Some(err.to_string()));
                         Err(anyhow::anyhow!(
                             "plugin '{}' on_load failed. detail: {}",
@@ -272,7 +272,7 @@ impl PluginManager {
                 }
                 Err(err) => {
                     log::error!("Failed to start plugin {}: {err}", name);
-                    plugin.stop();
+                    plugin.stop().await;
                 }
             }
         }
@@ -315,7 +315,7 @@ impl PluginManager {
         self.updated = true;
         match self.plugins.get_mut(name) {
             Some(plug) => {
-                plug.stop();
+                plug.stop().await;
                 log::info!("Disable successful");
                 self.set_plugin_disabled_persisted(name, true).await;
                 true
