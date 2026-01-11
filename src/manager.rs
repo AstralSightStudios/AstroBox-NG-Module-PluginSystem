@@ -245,9 +245,11 @@ impl PluginManager {
             }
         }
 
+        /*
         self.add(&dest_dir).await?;
         self.set_plugin_disabled_persisted(name, false).await;
         self.start_plugin(name).await?;
+        */
 
         Ok(())
     }
