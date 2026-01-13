@@ -33,6 +33,9 @@ enum Event {
     CLICK,
     HOVER,
     CHANGE,
+    INPUT,
+    FOCUS,
+    BLUR,
     POINTERDOWN,
     POINTERUP,
     POINTERMOVE,
@@ -44,6 +47,9 @@ impl Into<Event> for psys_host::ui::Event {
             psys_host::ui::Event::Click => Event::CLICK,
             psys_host::ui::Event::Hover => Event::HOVER,
             psys_host::ui::Event::Change => Event::CHANGE,
+            psys_host::ui::Event::Input => Event::INPUT,
+            psys_host::ui::Event::Focus => Event::FOCUS,
+            psys_host::ui::Event::Blur => Event::BLUR,
             psys_host::ui::Event::PointerDown => Event::POINTERDOWN,
             psys_host::ui::Event::PointerUp => Event::POINTERUP,
             psys_host::ui::Event::PointerMove => Event::POINTERMOVE,
@@ -53,6 +59,9 @@ impl Into<Event> for psys_host::ui::Event {
 #[derive(Clone, Serialize)]
 enum ElementType {
     BUTTON,
+    INPUT,
+    SELECT,
+    OPTION,
     IMAGE,
     VIDEO,
     AUDIO,
@@ -65,6 +74,9 @@ impl Into<ElementType> for psys_host::ui::ElementType {
     fn into(self) -> ElementType {
         match self {
             psys_host::ui::ElementType::Button => ElementType::BUTTON,
+            psys_host::ui::ElementType::Input => ElementType::INPUT,
+            psys_host::ui::ElementType::Select => ElementType::SELECT,
+            psys_host::ui::ElementType::Option => ElementType::OPTION,
             psys_host::ui::ElementType::Image => ElementType::IMAGE,
             psys_host::ui::ElementType::Video => ElementType::VIDEO,
             psys_host::ui::ElementType::Audio => ElementType::AUDIO,
