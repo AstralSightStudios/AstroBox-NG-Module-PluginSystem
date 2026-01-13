@@ -6,6 +6,7 @@ use wasmtime::component::{Accessor, FutureReader};
 use super::{HostString, PluginCtx};
 
 const FRONT_LANGUAGE_METHOD: &str = "host/os/astrobox_language";
+const FRONT_APPEARANCE_METHOD: &str = "host/os/appearance";
 
 impl psys_host::os::Host for PluginCtx {}
 
@@ -56,6 +57,24 @@ impl psys_host::os::HostWithStore for PluginCtx {
                     .await
                     .context("invoke frontend astrobox_language")?;
                 Ok::<HostString, Error>(language.into())
+            })
+        });
+        async move { future }
+    }
+
+    fn appearance<T>(
+        accessor: &Accessor<T, Self>,
+    ) -> impl core::future::Future<Output = FutureReader<HostString>> + Send {
+        let instance = accessor.instance();
+        let app_handle = accessor.with(|mut access| access.get().app_handle());
+        let future = accessor.with(|mut access| {
+            let app_handle = app_handle.clone();
+            FutureReader::new(instance, &mut access, async move {
+                let appearance: String =
+                    invoke_frontend(&app_handle, FRONT_APPEARANCE_METHOD, ())
+                        .await
+                        .context("invoke frontend appearance")?;
+                Ok::<HostString, Error>(appearance.into())
             })
         });
         async move { future }
