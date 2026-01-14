@@ -107,6 +107,10 @@ impl PluginRegisterState {
             true
         }
     }
+
+    pub async fn is_deeplink_registered(&self) -> bool {
+        *self.deeplink_registered.lock().await
+    }
 }
 
 const PRECOMPILE_INDEX_FILE: &str = "precompiled-index.json";
@@ -589,6 +593,10 @@ impl PluginRuntime {
         registrations
             .iter()
             .any(|reg| reg.addr == addr && reg.pkg_name == pkg_name)
+    }
+
+    pub async fn is_deeplink_registered(&self) -> bool {
+        self.register_state.is_deeplink_registered().await
     }
 
     pub async fn list_cards(&self) -> Vec<CardRegistration> {
