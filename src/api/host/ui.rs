@@ -19,6 +19,7 @@ pub struct Element {
     styles: HashMap<&'static str, String>,
     width: Option<u32>,
     height: Option<u32>,
+    without_default_styles: bool,
     children: Option<Vec<Element>>,
 }
 
@@ -105,6 +106,7 @@ impl Element {
             styles: HashMap::new(),
             width: None,
             height: None,
+            without_default_styles: false,
             children: None,
             event_listeners: Vec::new(),
         }
@@ -553,6 +555,15 @@ impl psys_host::ui::HostElement for PluginCtx {
     ) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
         let _ = el.styles.insert("transition", transition);
+        return_owned_element(self, self_)
+    }
+
+    fn without_default_styles(
+        &mut self,
+        self_: Resource<Element>,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        el.without_default_styles = true;
         return_owned_element(self, self_)
     }
 
