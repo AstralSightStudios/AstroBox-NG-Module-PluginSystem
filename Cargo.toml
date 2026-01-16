@@ -23,6 +23,7 @@ os_info = "3.7"
 sys-locale = "0.3"
 whoami = "1.5"
 rand = { version = "0.9", features = ["std"] }
+chrono = "0.4"
 
 # Wasmtime
 wasmtime = { version = "38.0.3", features = [

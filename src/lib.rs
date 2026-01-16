@@ -25,6 +25,7 @@ pub mod bindings {
             "astrobox:psys-host/os/version": async | store,
             "astrobox:psys-host/os/astrobox-language": async | store,
             "astrobox:psys-host/os/appearance": async | store,
+            "astrobox:psys-host/os/timezone-offset-minutes": async | store,
             "astrobox:psys-host/transport/send": async | store,
             "astrobox:psys-host/transport/request": async | store,
             "astrobox:psys-host/dialog/show-dialog": async | store,

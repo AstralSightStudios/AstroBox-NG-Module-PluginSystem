@@ -1,5 +1,6 @@
 use crate::bindings::astrobox::psys_host;
 use anyhow::{Context, Error};
+use chrono::Local;
 use frontbridge::invoke_frontend;
 use wasmtime::component::{Accessor, FutureReader};
 
@@ -75,6 +76,19 @@ impl psys_host::os::HostWithStore for PluginCtx {
                         .await
                         .context("invoke frontend appearance")?;
                 Ok::<HostString, Error>(appearance.into())
+            })
+        });
+        async move { future }
+    }
+
+    fn timezone_offset_minutes<T>(
+        accessor: &Accessor<T, Self>,
+    ) -> impl core::future::Future<Output = FutureReader<i32>> + Send {
+        let instance = accessor.instance();
+        let future = accessor.with(|mut access| {
+            FutureReader::new(instance, &mut access, async move {
+                let offset_seconds = Local::now().offset().local_minus_utc();
+                Ok::<i32, Error>(offset_seconds / 60)
             })
         });
         async move { future }
