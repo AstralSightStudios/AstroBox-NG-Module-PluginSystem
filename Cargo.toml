@@ -40,4 +40,5 @@ hex = "0.4"
 wasmtime-wasi-http = "38.0.3"
 tauri = { version = "2.9.2", features = ["rustls-tls"] }
 tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2.5.2"
 frontbridge = { path = "../frontbridge" }

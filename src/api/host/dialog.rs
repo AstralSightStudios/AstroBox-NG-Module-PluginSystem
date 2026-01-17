@@ -1,6 +1,7 @@
 use anyhow::Error;
 use tauri::AppHandle;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
+use tauri_plugin_opener::OpenerExt;
 use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, FutureReader};
 
@@ -8,7 +9,16 @@ use crate::bindings::astrobox::psys_host;
 
 use super::{HostString, HostVec, PluginCtx};
 
-impl psys_host::dialog::Host for PluginCtx {}
+impl psys_host::dialog::Host for PluginCtx {
+    fn open_url(&mut self, url: HostString) -> wasmtime::Result<()> {
+        let app_handle = self.app_handle();
+        let url: String = url.into();
+        if let Err(err) = app_handle.opener().open_url(url, None::<&str>) {
+            log::warn!("Failed to open url in system browser: {err}");
+        }
+        Ok(())
+    }
+}
 
 impl psys_host::dialog::HostWithStore for PluginCtx {
     fn show_dialog<T>(
