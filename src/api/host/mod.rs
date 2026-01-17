@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::path::PathBuf;
 
 use tauri::AppHandle;
 use wasmtime::component::ResourceTable;
@@ -15,6 +16,7 @@ pub struct PluginCtx {
     wasi_ctx: WasiCtx,
     http_ctx: WasiHttpCtx,
     app_handle: AppHandle,
+    plugin_root: PathBuf,
     register_state: Arc<PluginRegisterState>,
     plugin_name: String,
     permissions: Arc<Vec<String>>,
@@ -24,6 +26,7 @@ impl PluginCtx {
     pub fn new(
         wasi_ctx: WasiCtx,
         app_handle: AppHandle,
+        plugin_root: PathBuf,
         plugin_name: String,
         register_state: Arc<PluginRegisterState>,
         permissions: Arc<Vec<String>>,
@@ -33,6 +36,7 @@ impl PluginCtx {
             wasi_ctx,
             http_ctx: WasiHttpCtx::new(),
             app_handle,
+            plugin_root,
             register_state,
             plugin_name,
             permissions,
@@ -49,6 +53,10 @@ impl PluginCtx {
 
     pub(crate) fn plugin_name(&self) -> &str {
         self.plugin_name.as_str()
+    }
+
+    pub(crate) fn plugin_root(&self) -> &PathBuf {
+        &self.plugin_root
     }
 
     pub(crate) fn permissions(&self) -> Arc<Vec<String>> {
@@ -87,6 +95,7 @@ mod os;
 mod permission;
 mod queue;
 mod register;
+mod timer;
 mod thirdpartyapp;
 mod transport;
 pub mod ui;

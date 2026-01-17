@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, atomic::{AtomicU64, Ordering}};
 
 use anyhow::{Context, Result};
 use hex;
@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, p2};
@@ -71,6 +72,8 @@ pub struct PluginRegisterState {
     providers: Mutex<Vec<ProviderRegistration>>,
     cards: Mutex<Vec<CardRegistration>>,
     deeplink_registered: Mutex<bool>,
+    timers: StdMutex<HashMap<u64, JoinHandle<()>>>,
+    next_timer_id: AtomicU64,
 }
 
 impl PluginRegisterState {
@@ -110,6 +113,45 @@ impl PluginRegisterState {
 
     pub async fn is_deeplink_registered(&self) -> bool {
         *self.deeplink_registered.lock().await
+    }
+
+    pub fn next_timer_id(&self) -> u64 {
+        self.next_timer_id.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    pub fn insert_timer(&self, id: u64, handle: JoinHandle<()>) {
+        let mut guard = self
+            .timers
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        guard.insert(id, handle);
+    }
+
+    pub fn remove_timer(&self, id: u64) -> Option<JoinHandle<()>> {
+        let mut guard = self
+            .timers
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        guard.remove(&id)
+    }
+
+    pub fn clear_timer(&self, id: u64) -> bool {
+        if let Some(handle) = self.remove_timer(id) {
+            handle.abort();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn clear_all_timers(&self) {
+        let mut guard = self
+            .timers
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        for (_, handle) in guard.drain() {
+            handle.abort();
+        }
     }
 }
 
@@ -454,6 +496,7 @@ impl PluginRuntime {
             PluginCtx::new(
                 wasi_ctx,
                 self.app_handle.clone(),
+                self.plugin_root.clone(),
                 self.name.clone(),
                 Arc::clone(&self.register_state),
                 Arc::clone(&self.permissions),
@@ -616,6 +659,7 @@ impl PluginRuntime {
     pub async fn clear_instance(&self) {
         let mut guard = self.instance.lock().await;
         *guard = None;
+        self.register_state.clear_all_timers();
     }
 }
 
