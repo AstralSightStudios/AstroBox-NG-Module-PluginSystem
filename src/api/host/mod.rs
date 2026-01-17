@@ -17,6 +17,7 @@ pub struct PluginCtx {
     app_handle: AppHandle,
     register_state: Arc<PluginRegisterState>,
     plugin_name: String,
+    permissions: Arc<Vec<String>>,
 }
 
 impl PluginCtx {
@@ -25,6 +26,7 @@ impl PluginCtx {
         app_handle: AppHandle,
         plugin_name: String,
         register_state: Arc<PluginRegisterState>,
+        permissions: Arc<Vec<String>>,
     ) -> Self {
         Self {
             table: ResourceTable::new(),
@@ -33,6 +35,7 @@ impl PluginCtx {
             app_handle,
             register_state,
             plugin_name,
+            permissions,
         }
     }
 
@@ -46,6 +49,10 @@ impl PluginCtx {
 
     pub(crate) fn plugin_name(&self) -> &str {
         self.plugin_name.as_str()
+    }
+
+    pub(crate) fn permissions(&self) -> Arc<Vec<String>> {
+        Arc::clone(&self.permissions)
     }
 }
 
@@ -77,6 +84,7 @@ mod dialog;
 mod event;
 mod interconnect;
 mod os;
+mod permission;
 mod queue;
 mod register;
 mod thirdpartyapp;

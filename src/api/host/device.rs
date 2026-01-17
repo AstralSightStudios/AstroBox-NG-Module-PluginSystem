@@ -2,11 +2,15 @@ use crate::bindings::astrobox::psys_host;
 use anyhow::{Context, Error};
 use corelib::device::xiaomi::XiaomiDevice;
 use frontbridge::invoke_frontend;
+use serde_json::json;
 use serde::Deserialize;
 use tauri::Manager;
 use wasmtime::component::{Accessor, FutureReader};
 
-use super::{HostString, HostVec, PluginCtx};
+use super::{
+    HostString, HostVec, PluginCtx,
+    permission::check_permission_declared,
+};
 
 const FRONT_DEVICE_LIST_METHOD: &str = "host/device/get_device_list";
 
@@ -36,9 +40,28 @@ impl psys_host::device::HostWithStore for PluginCtx {
     {
         let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
+        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
             let app_handle = app_handle.clone();
             FutureReader::new(instance, &mut access, async move {
+                log::info!(
+                    "[pluginsystem] device list request (history) from {}",
+                    plugin_name
+                );
+                if !check_permission_declared(
+                    &app_handle,
+                    permissions.as_ref(),
+                    "device",
+                    json!({ "plugin": plugin_name }),
+                )
+                .await
+                {
+                    return Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(
+                        HostVec::new(),
+                    );
+                }
+
                 let devices: Vec<StoredDeviceRecord> =
                     invoke_frontend(&app_handle, FRONT_DEVICE_LIST_METHOD, ())
                         .await
@@ -50,6 +73,10 @@ impl psys_host::device::HostWithStore for PluginCtx {
                     .filter_map(StoredDeviceRecord::into_psys_device)
                     .for_each(|dev| ret.push(dev));
 
+                log::info!(
+                    "[pluginsystem] device list return {} items",
+                    ret.len()
+                );
                 Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(ret)
             })
         });
@@ -61,8 +88,28 @@ impl psys_host::device::HostWithStore for PluginCtx {
     ) -> impl core::future::Future<Output = FutureReader<HostVec<psys_host::device::DeviceInfo>>> + Send
     {
         let instance = accessor.instance();
+        let app_handle = accessor.with(|mut access| access.get().app_handle());
+        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {
+                log::info!(
+                    "[pluginsystem] connected device list request from {}",
+                    plugin_name
+                );
+                if !check_permission_declared(
+                    &app_handle,
+                    permissions.as_ref(),
+                    "device",
+                    json!({ "plugin": plugin_name }),
+                )
+                .await
+                {
+                    return Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(
+                        HostVec::new(),
+                    );
+                }
+
                 let ret = corelib::ecs::with_rt_mut(|rt| {
                     rt.device_ids()
                         .filter_map(|device_id| {
@@ -75,6 +122,10 @@ impl psys_host::device::HostWithStore for PluginCtx {
                         .collect::<Vec<_>>()
                 })
                 .await;
+                log::info!(
+                    "[pluginsystem] connected device list return {} items",
+                    ret.len()
+                );
                 Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(ret)
             })
         });
@@ -87,9 +138,22 @@ impl psys_host::device::HostWithStore for PluginCtx {
     ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
         let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
+        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {
                 let addr = device_addr;
+
+                if !check_permission_declared(
+                    &app_handle,
+                    permissions.as_ref(),
+                    "device",
+                    json!({ "plugin": plugin_name }),
+                )
+                .await
+                {
+                    return Ok::<core::result::Result<(), ()>, Error>(Err(()));
+                }
 
                 app_handle
                     .clone()

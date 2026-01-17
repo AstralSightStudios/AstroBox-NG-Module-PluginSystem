@@ -352,6 +352,7 @@ pub struct PluginRuntime {
     plugin_root: PathBuf,
     app_handle: AppHandle,
     register_state: Arc<PluginRegisterState>,
+    permissions: Arc<Vec<String>>,
     instance: Arc<Mutex<Option<PluginInstance>>>,
 }
 
@@ -361,6 +362,13 @@ struct PluginInstance {
 }
 
 impl PluginRuntime {
+    fn normalize_permissions(raw: &[String]) -> Vec<String> {
+        raw.iter()
+            .map(|permission| permission.trim().to_ascii_lowercase())
+            .filter(|permission| !permission.is_empty())
+            .collect()
+    }
+
     fn emit_progress(&self, stage: &str, detail: Option<String>) {
         emit_pluginsystem_progress(&self.app_handle, &self.name, stage, detail);
     }
@@ -418,6 +426,7 @@ impl PluginRuntime {
             plugin_root: path.to_path_buf(),
             app_handle,
             register_state: Arc::new(PluginRegisterState::new()),
+            permissions: Arc::new(Self::normalize_permissions(&manifest.permissions)),
             instance: Arc::new(Mutex::new(None)),
         })
     }
@@ -447,6 +456,7 @@ impl PluginRuntime {
                 self.app_handle.clone(),
                 self.name.clone(),
                 Arc::clone(&self.register_state),
+                Arc::clone(&self.permissions),
             ),
         ))
     }
