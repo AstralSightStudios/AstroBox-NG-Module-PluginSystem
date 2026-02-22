@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use frontbridge::invoke_frontend;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -10,8 +10,8 @@ use tauri::{AppHandle, Emitter};
 use zip::ZipArchive;
 
 use crate::manifest::PluginManifest;
-use crate::{PLUGINSYSTEM_PROGRESS_EVENT, PluginSystemProgressPayload};
 use crate::plugin::{CardRegistration, Plugin, PluginData, purge_precompiled_component};
+use crate::{PLUGINSYSTEM_PROGRESS_EVENT, PluginSystemProgressPayload};
 
 pub struct PluginManager {
     plugin_root: PathBuf,
@@ -47,10 +47,7 @@ impl PluginManager {
             stage: stage.to_string(),
             detail,
         };
-        if let Err(err) = self
-            .app_handle
-            .emit(PLUGINSYSTEM_PROGRESS_EVENT, &payload)
-        {
+        if let Err(err) = self.app_handle.emit(PLUGINSYSTEM_PROGRESS_EVENT, &payload) {
             log::error!("Failed to emit plugin progress event: {err}");
         }
     }
@@ -154,19 +151,16 @@ impl PluginManager {
     pub async fn start_plugin(&mut self, name: &str) -> Result<()> {
         let mut should_remove = false;
         let app_handle = self.app_handle.clone();
-        let emit_progress =
-            |plugin: &str, stage: &str, detail: Option<String>| {
-                let payload = PluginSystemProgressPayload {
-                    plugin: plugin.to_string(),
-                    stage: stage.to_string(),
-                    detail,
-                };
-                if let Err(err) =
-                    app_handle.emit(PLUGINSYSTEM_PROGRESS_EVENT, &payload)
-                {
-                    log::error!("Failed to emit plugin progress event: {err}");
-                }
+        let emit_progress = |plugin: &str, stage: &str, detail: Option<String>| {
+            let payload = PluginSystemProgressPayload {
+                plugin: plugin.to_string(),
+                stage: stage.to_string(),
+                detail,
             };
+            if let Err(err) = app_handle.emit(PLUGINSYSTEM_PROGRESS_EVENT, &payload) {
+                log::error!("Failed to emit plugin progress event: {err}");
+            }
+        };
 
         let result = match self.plugins.get_mut(name) {
             Some(plugin) => {
@@ -207,6 +201,19 @@ impl PluginManager {
         }
 
         result
+    }
+
+    pub async fn add_from_dir(&mut self, name: &str, path: &Path) -> Result<()> {
+        self.updated = true;
+        if !path.is_dir() {
+            return Err(anyhow!("source path is not a directory"));
+        }
+        let dest_dir = self.plugin_root.join(name);
+        if dest_dir.exists() {
+            fs::remove_dir_all(&dest_dir)?;
+        }
+        copy_dir_recursive(path, &dest_dir)?;
+        Ok(())
     }
 
     pub async fn add_from_abp(&mut self, name: &str, path: &Path) -> Result<()> {
@@ -300,14 +307,8 @@ impl PluginManager {
                 continue;
             }
 
-            if let Err(err) = runtime
-                .dispatch_interconnect_message(payload.clone())
-                .await
-            {
-                log::error!(
-                    "Failed to deliver interconnect message to {}: {err}",
-                    name
-                );
+            if let Err(err) = runtime.dispatch_interconnect_message(payload.clone()).await {
+                log::error!("Failed to deliver interconnect message to {}: {err}", name);
             }
         }
     }
@@ -364,10 +365,8 @@ impl PluginManager {
             let path = entry.path();
             if path.is_dir() {
                 if let Err(e) = self.add(&path).await {
-                    let detail = format!(
-                        "Failed to load plugin from {}: {e}",
-                        path.to_string_lossy()
-                    );
+                    let detail =
+                        format!("Failed to load plugin from {}: {e}", path.to_string_lossy());
                     log::error!("{detail}");
                     let label = path
                         .file_name()
@@ -430,4 +429,27 @@ impl PluginManager {
     pub fn is_updated(&self) -> bool {
         self.updated
     }
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    if !dst.exists() {
+        fs::create_dir_all(dst)?;
+    }
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let target_path = dst.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry_path, &target_path)?;
+        } else if file_type.is_file() {
+            if let Some(parent) = target_path.parent() {
+                if !parent.exists() {
+                    fs::create_dir_all(parent)?;
+                }
+            }
+            fs::copy(&entry_path, &target_path)?;
+        }
+    }
+    Ok(())
 }
