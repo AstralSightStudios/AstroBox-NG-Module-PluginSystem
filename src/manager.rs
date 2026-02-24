@@ -1,9 +1,9 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use frontbridge::invoke_frontend;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Emitter};
@@ -203,12 +203,15 @@ impl PluginManager {
         result
     }
 
-    pub async fn add_from_dir(&mut self, name: &str, path: &Path) -> Result<()> {
+    pub async fn add_from_dir(&mut self, _name: &str, path: &Path) -> Result<()> {
         self.updated = true;
         if !path.is_dir() {
             return Err(anyhow!("source path is not a directory"));
         }
-        let dest_dir = self.plugin_root.join(name);
+        let manifest = PluginManifest::load_from_dir(path)?;
+        self.unload_plugin_for_overwrite(manifest.name.as_str())
+            .await;
+        let dest_dir = self.plugin_root.join(manifest.name.as_str());
         if dest_dir.exists() {
             fs::remove_dir_all(&dest_dir)?;
         }
@@ -216,17 +219,21 @@ impl PluginManager {
         Ok(())
     }
 
-    pub async fn add_from_abp(&mut self, name: &str, path: &Path) -> Result<()> {
+    pub async fn add_from_abp(&mut self, _name: &str, path: &Path) -> Result<()> {
         self.updated = true;
         let package_raw = tokio::fs::read(path).await?;
+        let manifest = resolve_manifest_from_abp(&package_raw)?;
+
+        self.unload_plugin_for_overwrite(manifest.name.as_str())
+            .await;
+        let dest_dir = self.plugin_root.join(manifest.name.as_str());
+        if dest_dir.exists() {
+            fs::remove_dir_all(&dest_dir)?;
+        }
+        fs::create_dir_all(&dest_dir)?;
+
         let reader = Cursor::new(package_raw);
         let mut archive = ZipArchive::new(reader)?;
-
-        let dest_dir = self.plugin_root.join(name);
-
-        if !dest_dir.exists() {
-            fs::create_dir_all(&dest_dir)?;
-        }
 
         for i in 0..archive.len() {
             let mut file = archive.by_index(i)?;
@@ -289,6 +296,36 @@ impl PluginManager {
         false
     }
 
+    async fn take_plugin_for_cleanup(
+        &mut self,
+        plugin_name: &str,
+    ) -> Option<(PathBuf, PluginManifest)> {
+        match self.plugins.remove(plugin_name) {
+            Some(mut plugin) => {
+                plugin.stop().await;
+                Some((plugin.path, plugin.manifest))
+            }
+            None => None,
+        }
+    }
+
+    async fn unload_plugin_for_overwrite(&mut self, plugin_name: &str) {
+        let Some((plugin_path, plugin_manifest)) = self.take_plugin_for_cleanup(plugin_name).await
+        else {
+            return;
+        };
+        log::info!(
+            "Plugin {} is active during install, stopping current runtime before overwrite",
+            plugin_name
+        );
+        if let Err(err) = purge_precompiled_component(&plugin_path, &plugin_manifest) {
+            log::warn!(
+                "Failed to purge precompiled artifacts for plugin {} before overwrite: {err}",
+                plugin_name
+            );
+        }
+    }
+
     pub async fn dispatch_interconnect_message(
         &mut self,
         addr: &str,
@@ -329,7 +366,7 @@ impl PluginManager {
 
     pub async fn remove(&mut self, name: &String) -> bool {
         self.updated = true;
-        let plugin = match self.plugins.remove(name) {
+        let (plugin_path, plugin_manifest) = match self.take_plugin_for_cleanup(name).await {
             Some(plugin) => plugin,
             None => {
                 log::error!("Plugin {} not found", name);
@@ -337,14 +374,14 @@ impl PluginManager {
             }
         };
 
-        if let Err(err) = purge_precompiled_component(&plugin.path, &plugin.manifest) {
+        if let Err(err) = purge_precompiled_component(&plugin_path, &plugin_manifest) {
             log::warn!(
                 "Failed to purge precompiled artifacts for plugin {}: {err}",
                 name
             );
         }
 
-        match fs::remove_dir_all(&plugin.path) {
+        match fs::remove_dir_all(&plugin_path) {
             Ok(_) => {
                 self.set_plugin_disabled_persisted(name, false).await;
                 true
@@ -452,4 +489,37 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn resolve_manifest_from_abp(package_raw: &[u8]) -> Result<PluginManifest> {
+    let reader = Cursor::new(package_raw);
+    let mut archive = ZipArchive::new(reader)?;
+
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        if file.name().ends_with('/') {
+            continue;
+        }
+
+        let file_name = file.mangled_name();
+        let is_manifest = file_name
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.eq_ignore_ascii_case("manifest.json"))
+            .unwrap_or(false);
+        if !is_manifest {
+            continue;
+        }
+
+        let mut data = String::new();
+        file.read_to_string(&mut data)?;
+        let manifest: PluginManifest = serde_json::from_str(&data)
+            .context("Failed to resolve plugin manifest from plugin package")?;
+        if manifest.name.trim().is_empty() {
+            return Err(anyhow!("name is empty in package manifest"));
+        }
+        return Ok(manifest);
+    }
+
+    Err(anyhow!("manifest.json not found in plugin package"))
 }
