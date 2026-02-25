@@ -142,7 +142,7 @@ impl psys_host::device::HostWithStore for PluginCtx {
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {
-                let addr = device_addr;
+                let addr = device_addr.to_string();
 
                 if !check_permission_declared(
                     &app_handle,
@@ -155,15 +155,22 @@ impl psys_host::device::HostWithStore for PluginCtx {
                     return Ok::<core::result::Result<(), ()>, Error>(Err(()));
                 }
 
-                app_handle
-                    .clone()
-                    .get_webview_window("main")
-                    .unwrap()
-                    .eval(format!(
-                        "window.__TAURI_INTERNALS__.invoke('miwear_disconnect', {{ addr: '{}' }})",
-                        addr
-                    ))
-                    .unwrap();
+                let Some(window) = app_handle.clone().get_webview_window("main") else {
+                    log::warn!("[pluginsystem] disconnect_device failed: main window not found");
+                    return Ok::<core::result::Result<(), ()>, Error>(Err(()));
+                };
+
+                let addr_json =
+                    serde_json::to_string(addr.as_str()).unwrap_or_else(|_| "\"\"".to_string());
+                let script = format!(
+                    "window.__TAURI_INTERNALS__.invoke('miwear_disconnect', {{ addr: {} }})",
+                    addr_json
+                );
+
+                if let Err(err) = window.eval(script.as_str()) {
+                    log::warn!("[pluginsystem] disconnect_device eval failed: {err}");
+                    return Ok::<core::result::Result<(), ()>, Error>(Err(()));
+                }
 
                 Ok::<core::result::Result<(), ()>, Error>(Ok(()))
             })

@@ -1,7 +1,9 @@
 use anyhow::{Error, Result};
+use futures_util::FutureExt;
 use manager::PluginManager;
 use once_cell::sync::{Lazy, OnceCell};
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::{cell::RefCell, path::PathBuf, thread};
 use std::sync::Mutex;
@@ -94,6 +96,16 @@ fn store_init_state(payload: &PluginSystemReadyPayload) {
     *guard = Some(payload.clone());
 }
 
+fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "unknown panic payload".to_string()
+}
+
 pub fn emit_last_init_state(app_handle: &AppHandle) -> bool {
     let payload = {
         let guard = PLUGINSYSTEM_INIT_STATE
@@ -152,16 +164,27 @@ pub fn init(dir: PathBuf, app_handle: AppHandle) -> Result<()> {
                 "Loading plugins from dir {}",
                 dir_cl.to_string_lossy().to_string()
             );
-            let init_report = pm.load_from_dir().await;
+            let init_report = AssertUnwindSafe(pm.load_from_dir()).catch_unwind().await;
             let payload = match init_report {
-                Ok(ref errors) => PluginSystemReadyPayload {
+                Ok(Ok(ref errors)) => PluginSystemReadyPayload {
                     ok: errors.is_empty(),
                     errors: errors.clone(),
                 },
-                Err(ref err) => PluginSystemReadyPayload {
-                    ok: false,
-                    errors: vec![err.to_string()],
-                },
+                Ok(Err(ref err)) => {
+                    log::error!("PluginManager init failed: {err}");
+                    PluginSystemReadyPayload {
+                        ok: false,
+                        errors: vec![err.to_string()],
+                    }
+                }
+                Err(panic_payload) => {
+                    let detail = panic_payload_to_string(panic_payload.as_ref());
+                    log::error!("PluginManager init panicked: {detail}");
+                    PluginSystemReadyPayload {
+                        ok: false,
+                        errors: vec![format!("Plugin manager init panicked: {detail}")],
+                    }
+                }
             };
 
             store_init_state(&payload);
@@ -169,15 +192,14 @@ pub fn init(dir: PathBuf, app_handle: AppHandle) -> Result<()> {
                 log::error!("Failed to emit plugin system init event: {err}");
             }
 
-            if let Err(e) = init_report {
-                log::error!("PluginManager init failed: {e}");
-                return;
-            }
-
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     Command::Exec(task) => {
-                        task(&mut pm).await;
+                        let task_result = AssertUnwindSafe(task(&mut pm)).catch_unwind().await;
+                        if let Err(panic_payload) = task_result {
+                            let detail = panic_payload_to_string(panic_payload.as_ref());
+                            log::error!("Plugin command panicked: {detail}");
+                        }
                     }
                 }
             }

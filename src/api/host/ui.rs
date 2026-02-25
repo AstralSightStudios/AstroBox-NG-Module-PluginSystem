@@ -140,14 +140,23 @@ fn return_owned_element(
 impl psys_host::ui::Host for PluginCtx {
     fn render(&mut self, id: String, element: Resource<Element>) -> wasmtime::Result<()> {
         let el = take_or_clone_element(self, element)?;
-        let json = serde_json::to_string(&el);
+        let json = match serde_json::to_string(&el) {
+            Ok(value) => value,
+            Err(err) => {
+                log::error!(
+                    "[pluginsystem] failed to serialize plugin ui render payload for {}: {err}",
+                    self.plugin_name()
+                );
+                return Ok(());
+            }
+        };
 
         let _ = self.app_handle.emit(
             "plugin-ui-render",
             serde_json::json!({
                 "name": self.plugin_name(),
                 "id": id,
-                "ui": json.unwrap()
+                "ui": json
             }),
         );
 
