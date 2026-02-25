@@ -599,6 +599,25 @@ impl PluginRuntime {
         Ok(())
     }
 
+    pub async fn dispatch_card_render(&self, element_id: String) -> Result<()> {
+        let mut guard = self.instance.lock().await;
+        let instance = guard.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name)
+        })?;
+        let event_iface = instance.world.astrobox_psys_plugin_event();
+        let mut future = event_iface
+            .call_on_card_render(&mut instance.store, element_id.as_str())
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to start the plugin on-card-render callback. detail: {}",
+                    e.to_string()
+                )
+            })?;
+        future.close(&mut instance.store);
+        Ok(())
+    }
+
     pub async fn dispatch_ui_event(
         &self,
         event_id: String,
