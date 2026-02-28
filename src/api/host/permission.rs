@@ -95,22 +95,23 @@ pub(crate) async fn check_permission_declared(
     let operation_label = operation.clone();
     let plugin = extract_plugin_name(&params).unwrap_or_else(|| "unknown".to_string());
     log::info!(
-        "[pluginsystem] permission request start '{}' from {}",
+        "[plugin:{}] permission request start '{}'",
+        plugin,
         operation_label,
-        plugin
     );
     if !is_permission_declared(permissions, &operation) {
         log::warn!(
-            "[pluginsystem] permission '{}' not declared by plugin",
+            "[plugin:{}] permission '{}' not declared by plugin",
+            plugin,
             operation_label
         );
         return false;
     }
     let granted = check_permission(app_handle, operation, params).await;
     log::info!(
-        "[pluginsystem] permission request done '{}' from {} -> {}",
-        operation_label,
+        "[plugin:{}] permission request done '{}' -> {}",
         plugin,
+        operation_label,
         granted
     );
     granted

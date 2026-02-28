@@ -296,7 +296,7 @@ fn ensure_precompiled_component(
 
     if needs_recompile {
         log::info!(
-            "Precompiling plugin {} wasm for faster startup...",
+            "[plugin:{}] Precompiling wasm for faster startup...",
             manifest.name
         );
         let wasm_bytes = fs::read(entry_wasm).with_context(|| {
@@ -437,17 +437,17 @@ impl PluginRuntime {
 
         let plugin_name = manifest.name.clone();
 
-        log::info!("Creating wasmtime engine for plugin {}...", plugin_name);
+        log::info!("[plugin:{}] Creating wasmtime engine...", plugin_name);
         let engine = create_engine()?;
 
         log::info!(
-            "Ensuring precompiled component for plugin {}...",
+            "[plugin:{}] Ensuring precompiled component...",
             plugin_name
         );
         let artifact_path = ensure_precompiled_component(&engine, path, manifest, &entry_path)?;
 
         log::info!(
-            "Loading precompiled component for plugin {}...",
+            "[plugin:{}] Loading precompiled component...",
             plugin_name
         );
         let component = unsafe {
@@ -519,14 +519,14 @@ impl PluginRuntime {
     }
 
     pub async fn run(&self) -> Result<()> {
-        log::info!("Creating store for plugin {}...", self.name.clone());
+        log::info!("[plugin:{}] Creating store...", self.name.clone());
         self.emit_progress("create_store", None);
         let mut store = self.create_store()?;
-        log::info!("Building linker for plugin {}...", self.name.clone());
+        log::info!("[plugin:{}] Building linker...", self.name.clone());
         self.emit_progress("build_linker", None);
         let linker = self.build_linker()?;
 
-        log::info!("Instantiating world for plugin {}...", self.name.clone());
+        log::info!("[plugin:{}] Instantiating world...", self.name.clone());
         self.emit_progress("instantiate", None);
         {
             let mut guard = self.instance.lock().await;
@@ -541,7 +541,7 @@ impl PluginRuntime {
                 )
             })?;
 
-        log::info!("Calling on_load for plugin {}...", self.name.clone());
+        log::info!("[plugin:{}] Calling on_load...", self.name.clone());
         self.emit_progress("on_load", None);
         let lifecycle = instance.astrobox_psys_plugin_lifecycle();
         lifecycle
@@ -702,7 +702,7 @@ impl Plugin {
         let manifest = PluginManifest::load_from_dir(&path)?;
 
         log::info!(
-            "Initializing wasi runtime for plugin {}...",
+            "[plugin:{}] Initializing wasi runtime...",
             manifest.clone().name
         );
         let runtime = PluginRuntime::initialise(&path, &manifest, app_handle)?;

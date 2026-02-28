@@ -76,7 +76,7 @@ impl PluginManager {
 
         self.plugins.insert(name.clone(), plugin);
         self.emit_progress(&name, "loaded", None);
-        log::info!("Plugin {} loaded!", name);
+        log::info!("[plugin:{}] Loaded", name);
         Ok(())
     }
 
@@ -87,7 +87,7 @@ impl PluginManager {
 
         for name in names {
             if let Err(err) = self.start_plugin(&name).await {
-                log::error!("Failed to start plugin {}: {err}", name);
+                log::error!("[plugin:{}] Failed to start: {err}", name);
                 errors.push(err.to_string());
             }
         }
@@ -165,7 +165,7 @@ impl PluginManager {
         let result = match self.plugins.get_mut(name) {
             Some(plugin) => {
                 if plugin.state.disabled {
-                    log::info!("Plugin {} is disabled, skip starting", name);
+                    log::info!("[plugin:{}] Disabled, skip starting", name);
                     emit_progress(name, "disabled", None);
                     return Ok(());
                 }
@@ -269,11 +269,11 @@ impl PluginManager {
     }
 
     pub async fn enable(&mut self, name: &String) -> bool {
-        log::info!("Enable plugin {}", name);
+        log::info!("[plugin:{}] Enable requested", name);
         self.updated = true;
         if let Some(plugin) = self.plugins.get_mut(name) {
             if plugin.state.loaded && !plugin.state.disabled {
-                log::info!("Plugin {} already enabled", name);
+                log::info!("[plugin:{}] Already enabled", name);
                 self.set_plugin_disabled_persisted(name, false).await;
                 return true;
             }
@@ -287,7 +287,7 @@ impl PluginManager {
                     return true;
                 }
                 Err(err) => {
-                    log::error!("Failed to start plugin {}: {err}", name);
+                    log::error!("[plugin:{}] Failed to start: {err}", name);
                     plugin.stop().await;
                 }
             }
@@ -315,12 +315,12 @@ impl PluginManager {
             return;
         };
         log::info!(
-            "Plugin {} is active during install, stopping current runtime before overwrite",
+            "[plugin:{}] Active during install, stopping runtime before overwrite",
             plugin_name
         );
         if let Err(err) = purge_precompiled_component(&plugin_path, &plugin_manifest) {
             log::warn!(
-                "Failed to purge precompiled artifacts for plugin {} before overwrite: {err}",
+                "[plugin:{}] Failed to purge precompiled artifacts before overwrite: {err}",
                 plugin_name
             );
         }
@@ -345,13 +345,13 @@ impl PluginManager {
             }
 
             if let Err(err) = runtime.dispatch_interconnect_message(payload.clone()).await {
-                log::error!("Failed to deliver interconnect message to {}: {err}", name);
+                log::error!("[plugin:{}] Failed to deliver interconnect message: {err}", name);
             }
         }
     }
 
     pub async fn disable(&mut self, name: &String) -> bool {
-        log::info!("Disable plugin {}", name);
+        log::info!("[plugin:{}] Disable requested", name);
         self.updated = true;
         match self.plugins.get_mut(name) {
             Some(plug) => {
@@ -369,14 +369,14 @@ impl PluginManager {
         let (plugin_path, plugin_manifest) = match self.take_plugin_for_cleanup(name).await {
             Some(plugin) => plugin,
             None => {
-                log::error!("Plugin {} not found", name);
+                log::error!("[plugin:{}] Not found", name);
                 return false;
             }
         };
 
         if let Err(err) = purge_precompiled_component(&plugin_path, &plugin_manifest) {
             log::warn!(
-                "Failed to purge precompiled artifacts for plugin {}: {err}",
+                "[plugin:{}] Failed to purge precompiled artifacts: {err}",
                 name
             );
         }
@@ -387,7 +387,7 @@ impl PluginManager {
                 true
             }
             Err(e) => {
-                log::error!("Failed to remove plugin: {:?} error: {:?}", name, e);
+                log::error!("[plugin:{}] Failed to remove: {e:?}", name);
                 false
             }
         }

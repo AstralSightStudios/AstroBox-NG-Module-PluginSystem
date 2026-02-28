@@ -46,14 +46,14 @@ impl psys_host::device::HostWithStore for PluginCtx {
             let app_handle = app_handle.clone();
             FutureReader::new(instance, &mut access, async move {
                 log::info!(
-                    "[pluginsystem] device list request (history) from {}",
+                    "[plugin:{}] device list request (history)",
                     plugin_name
                 );
                 if !check_permission_declared(
                     &app_handle,
                     permissions.as_ref(),
                     "device",
-                    json!({ "plugin": plugin_name }),
+                    json!({ "plugin": plugin_name.clone() }),
                 )
                 .await
                 {
@@ -74,7 +74,8 @@ impl psys_host::device::HostWithStore for PluginCtx {
                     .for_each(|dev| ret.push(dev));
 
                 log::info!(
-                    "[pluginsystem] device list return {} items",
+                    "[plugin:{}] device list return {} items",
+                    plugin_name,
                     ret.len()
                 );
                 Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(ret)
@@ -94,14 +95,14 @@ impl psys_host::device::HostWithStore for PluginCtx {
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {
                 log::info!(
-                    "[pluginsystem] connected device list request from {}",
+                    "[plugin:{}] connected device list request",
                     plugin_name
                 );
                 if !check_permission_declared(
                     &app_handle,
                     permissions.as_ref(),
                     "device",
-                    json!({ "plugin": plugin_name }),
+                    json!({ "plugin": plugin_name.clone() }),
                 )
                 .await
                 {
@@ -123,7 +124,8 @@ impl psys_host::device::HostWithStore for PluginCtx {
                 })
                 .await;
                 log::info!(
-                    "[pluginsystem] connected device list return {} items",
+                    "[plugin:{}] connected device list return {} items",
+                    plugin_name,
                     ret.len()
                 );
                 Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(ret)
@@ -148,7 +150,7 @@ impl psys_host::device::HostWithStore for PluginCtx {
                     &app_handle,
                     permissions.as_ref(),
                     "device",
-                    json!({ "plugin": plugin_name }),
+                    json!({ "plugin": plugin_name.clone() }),
                 )
                 .await
                 {
@@ -156,7 +158,10 @@ impl psys_host::device::HostWithStore for PluginCtx {
                 }
 
                 let Some(window) = app_handle.clone().get_webview_window("main") else {
-                    log::warn!("[pluginsystem] disconnect_device failed: main window not found");
+                    log::warn!(
+                        "[plugin:{}] disconnect_device failed: main window not found",
+                        plugin_name
+                    );
                     return Ok::<core::result::Result<(), ()>, Error>(Err(()));
                 };
 
@@ -168,7 +173,7 @@ impl psys_host::device::HostWithStore for PluginCtx {
                 );
 
                 if let Err(err) = window.eval(script.as_str()) {
-                    log::warn!("[pluginsystem] disconnect_device eval failed: {err}");
+                    log::warn!("[plugin:{}] disconnect_device eval failed: {err}", plugin_name);
                     return Ok::<core::result::Result<(), ()>, Error>(Err(()));
                 }
 
