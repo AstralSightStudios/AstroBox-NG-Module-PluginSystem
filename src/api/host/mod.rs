@@ -91,6 +91,7 @@ mod device;
 mod dialog;
 mod event;
 mod interconnect;
+mod i18n;
 mod os;
 mod permission;
 mod queue;

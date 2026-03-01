@@ -46,6 +46,7 @@ pub mod bindings {
             "astrobox:psys-host/interconnect/send-qaic-message": async | store,
             "astrobox:psys-host/thirdpartyapp/launch-qa": async | store,
             "astrobox:psys-host/thirdpartyapp/get-thirdparty-app-list": async | store,
+            "astrobox:psys-host/i18n/load-json": async | store,
             default: trappable
         },
         exports: {
