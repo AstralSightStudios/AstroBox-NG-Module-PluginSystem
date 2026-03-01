@@ -2,18 +2,22 @@ use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::Read;
+use std::pin::Pin;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, atomic::{AtomicU64, Ordering}};
+use std::task::{Context as TaskContext, Poll};
 
 use anyhow::{Context, Result};
 use hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
+use tokio::io::AsyncWrite;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
+use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, p2};
 
 use crate::api::host::PluginCtx;
@@ -156,6 +160,160 @@ impl PluginRegisterState {
 }
 
 const PRECOMPILE_INDEX_FILE: &str = "precompiled-index.json";
+const PLUGIN_STDIO_PENDING_LIMIT: usize = 8 * 1024;
+
+#[derive(Clone, Copy)]
+enum PluginStdioKind {
+    Stdout,
+    Stderr,
+}
+
+impl PluginStdioKind {
+    fn target(self) -> &'static str {
+        match self {
+            Self::Stdout => "pluginsystem::plugin::stdout",
+            Self::Stderr => "pluginsystem::plugin::stderr",
+        }
+    }
+
+    fn emit(self, plugin_name: &str, line: &str) {
+        match self {
+            Self::Stdout => {
+                log::info!(
+                    target: self.target(),
+                    "[plugin:{}] {}",
+                    plugin_name,
+                    line
+                );
+            }
+            Self::Stderr => {
+                log::error!(
+                    target: self.target(),
+                    "[plugin:{}] {}",
+                    plugin_name,
+                    line
+                );
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PluginStdioStream {
+    plugin_name: Arc<str>,
+    kind: PluginStdioKind,
+    pending: Arc<StdMutex<Vec<u8>>>,
+}
+
+impl PluginStdioStream {
+    fn new(plugin_name: &str, kind: PluginStdioKind) -> Self {
+        Self {
+            plugin_name: Arc::from(plugin_name.to_string()),
+            kind,
+            pending: Arc::new(StdMutex::new(Vec::new())),
+        }
+    }
+
+    fn write_chunk(&self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+
+        let mut lines: Vec<Vec<u8>> = Vec::new();
+        {
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            pending.extend_from_slice(bytes);
+
+            let mut consumed = 0usize;
+            for (idx, byte) in pending.iter().enumerate() {
+                if *byte != b'\n' {
+                    continue;
+                }
+                lines.push(pending[consumed..idx].to_vec());
+                consumed = idx + 1;
+            }
+            if consumed > 0 {
+                pending.drain(0..consumed);
+            }
+
+            if pending.len() > PLUGIN_STDIO_PENDING_LIMIT {
+                lines.push(std::mem::take(&mut *pending));
+            }
+        }
+
+        for line in lines {
+            self.emit_line(&line);
+        }
+    }
+
+    fn flush_pending(&self) {
+        let tail = {
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if pending.is_empty() {
+                return;
+            }
+            std::mem::take(&mut *pending)
+        };
+        self.emit_line(&tail);
+    }
+
+    fn emit_line(&self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        let text = String::from_utf8_lossy(bytes);
+        let normalized = text.trim_end_matches('\r');
+        if normalized.trim().is_empty() {
+            return;
+        }
+        self.kind.emit(self.plugin_name.as_ref(), normalized);
+    }
+}
+
+impl IsTerminal for PluginStdioStream {
+    fn is_terminal(&self) -> bool {
+        false
+    }
+}
+
+impl StdoutStream for PluginStdioStream {
+    fn async_stream(&self) -> Box<dyn AsyncWrite + Send + Sync> {
+        Box::new(self.clone())
+    }
+}
+
+impl AsyncWrite for PluginStdioStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        self.write_chunk(buf);
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        _cx: &mut TaskContext<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        self.flush_pending();
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        _cx: &mut TaskContext<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        self.flush_pending();
+        Poll::Ready(Ok(()))
+    }
+}
 
 #[derive(Default, Serialize, Deserialize)]
 struct PrecompiledIndex {
@@ -475,7 +633,8 @@ impl PluginRuntime {
 
     fn build_wasi_ctx(&self) -> Result<WasiCtx> {
         let mut builder = WasiCtxBuilder::new();
-        builder.inherit_stdout().inherit_stderr();
+        builder.stdout(PluginStdioStream::new(&self.name, PluginStdioKind::Stdout));
+        builder.stderr(PluginStdioStream::new(&self.name, PluginStdioKind::Stderr));
 
         builder
             .preopened_dir(&self.plugin_root, ".", DirPerms::all(), FilePerms::all())
