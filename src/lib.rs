@@ -1,4 +1,4 @@
-use anyhow::{Error, Result};
+﻿use anyhow::{Error, Result};
 use futures_util::FutureExt;
 use manager::PluginManager;
 use once_cell::sync::{Lazy, OnceCell};
@@ -18,6 +18,7 @@ pub mod bindings {
         world: "psys-world",
         with:{
             "astrobox:psys-host/ui/element": crate::api::host::ui::Element,
+            "astrobox:psys-host/ui-v3/element": crate::api::host::v3::ui::Element,
         },
         imports: {
             "astrobox:psys-host/os/arch": async | store,

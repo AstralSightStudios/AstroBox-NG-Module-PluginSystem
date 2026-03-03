@@ -21,6 +21,33 @@ pub struct PluginManifest {
 }
 
 impl PluginManifest {
+    pub const SUPPORTED_API_LEVELS: &'static [u32] = &[2, 3];
+
+    pub fn validate(&self, manifest_path: &Path) -> Result<()> {
+        if self.name.trim().is_empty() {
+            return Err(corelib::anyhow_site!(
+                "name is empty in manifest: {}",
+                manifest_path.display()
+            ));
+        }
+
+        if !Self::SUPPORTED_API_LEVELS.contains(&self.api_level) {
+            let expected = Self::SUPPORTED_API_LEVELS
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join("|");
+            return Err(corelib::anyhow_site!(
+                "unsupported api_level={} in manifest: {} (expected one of: {})",
+                self.api_level,
+                manifest_path.display(),
+                expected
+            ));
+        }
+
+        Ok(())
+    }
+
     pub fn load_from_dir(dir: &Path) -> Result<Self> {
         let manifest_path = dir.join("manifest.json");
         let data = fs::read_to_string(&manifest_path).with_context(|| {
@@ -35,12 +62,7 @@ impl PluginManifest {
                 manifest_path.display()
             )
         })?;
-        if manifest.name.trim().is_empty() {
-            return Err(corelib::anyhow_site!(
-                "name is empty in manifest: {}",
-                manifest_path.display()
-            ));
-        }
+        manifest.validate(&manifest_path)?;
         Ok(manifest)
     }
 

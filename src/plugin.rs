@@ -1,4 +1,4 @@
-use std::collections::{HashMap, hash_map::DefaultHasher};
+﻿use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::Read;
@@ -547,6 +547,7 @@ fn emit_pluginsystem_progress(
 #[derive(Clone)]
 pub struct PluginRuntime {
     name: String,
+    api_level: u32,
     engine: Engine,
     component: Component,
     plugin_root: PathBuf,
@@ -621,6 +622,7 @@ impl PluginRuntime {
 
         Ok(Self {
             name: plugin_name,
+            api_level: manifest.api_level,
             engine,
             component,
             plugin_root: path.to_path_buf(),
@@ -716,6 +718,52 @@ impl PluginRuntime {
         Ok(())
     }
 
+    fn compact_ui_event(event: &str) -> String {
+        let mut normalized = String::with_capacity(event.len());
+        for ch in event.trim().chars() {
+            if ch == '-' || ch == '_' {
+                continue;
+            }
+            normalized.push(ch.to_ascii_uppercase());
+        }
+        normalized
+    }
+
+    fn normalize_ui_event_name(event: &str) -> String {
+        match Self::compact_ui_event(event).as_str() {
+            "MOUSEENTER" => "MOUSE-ENTER".to_string(),
+            "MOUSELEAVE" => "MOUSE-LEAVE".to_string(),
+            "POINTERDOWN" => "POINTER-DOWN".to_string(),
+            "POINTERUP" => "POINTER-UP".to_string(),
+            "POINTERMOVE" => "POINTER-MOVE".to_string(),
+            "KEYDOWN" => "KEY-DOWN".to_string(),
+            "KEYUP" => "KEY-UP".to_string(),
+            "LONGPRESS" => "LONG-PRESS".to_string(),
+            _ => event.trim().to_ascii_uppercase(),
+        }
+    }
+
+    fn map_ui_event_to_api2(event: &str) -> Option<psys_host::ui::Event> {
+        match Self::compact_ui_event(event).as_str() {
+            "CLICK" => Some(psys_host::ui::Event::Click),
+            "HOVER" => Some(psys_host::ui::Event::Hover),
+            "CHANGE" => Some(psys_host::ui::Event::Change),
+            "INPUT" => Some(psys_host::ui::Event::Input),
+            "FOCUS" => Some(psys_host::ui::Event::Focus),
+            "BLUR" => Some(psys_host::ui::Event::Blur),
+            "MOUSEENTER" => Some(psys_host::ui::Event::MouseEnter),
+            "MOUSELEAVE" => Some(psys_host::ui::Event::MouseLeave),
+            "POINTERDOWN" => Some(psys_host::ui::Event::PointerDown),
+            "POINTERUP" => Some(psys_host::ui::Event::PointerUp),
+            "POINTERMOVE" => Some(psys_host::ui::Event::PointerMove),
+            // API2 enum has no key/long-press variants, so map them for compatibility.
+            "KEYDOWN" => Some(psys_host::ui::Event::Input),
+            "KEYUP" => Some(psys_host::ui::Event::Input),
+            "LONGPRESS" => Some(psys_host::ui::Event::Click),
+            _ => None,
+        }
+    }
+
     pub async fn dispatch_event(
         &self,
         event_type: psys_plugin::event::EventType,
@@ -777,7 +825,7 @@ impl PluginRuntime {
         Ok(())
     }
 
-    pub async fn dispatch_ui_event(
+    async fn dispatch_ui_event_legacy(
         &self,
         event_id: String,
         event: psys_host::ui::Event,
@@ -804,6 +852,64 @@ impl PluginRuntime {
             })?;
         future.close(&mut instance.store);
         Ok(())
+    }
+
+    async fn dispatch_ui_event_v3_string(
+        &self,
+        event_id: String,
+        event_name: String,
+        payload: String,
+    ) -> Result<()> {
+        let mut guard = self.instance.lock().await;
+        let instance = guard.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name)
+        })?;
+        let event_iface = instance.world.astrobox_psys_plugin_event();
+        let wrapped_payload = serde_json::json!({
+            "kind": "ui-event-v3",
+            "event_id": event_id,
+            "event": event_name,
+            "event_payload": payload,
+        })
+        .to_string();
+        let mut future = event_iface
+            .call_on_event(
+                &mut instance.store,
+                psys_plugin::event::EventType::PluginMessage,
+                wrapped_payload.as_str(),
+            )
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to start the plugin on-ui-event-v3 callback. detail: {}",
+                    e.to_string()
+                )
+            })?;
+        future.close(&mut instance.store);
+        Ok(())
+    }
+
+    pub async fn dispatch_ui_event(
+        &self,
+        event_id: String,
+        event: String,
+        payload: String,
+    ) -> Result<()> {
+        if self.api_level >= 3 {
+            let normalized = Self::normalize_ui_event_name(&event);
+            return self
+                .dispatch_ui_event_v3_string(event_id, normalized, payload)
+                .await;
+        }
+
+        let mapped = Self::map_ui_event_to_api2(&event).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Unknown ui event type for api_level={}: {}",
+                self.api_level,
+                event
+            )
+        })?;
+        self.dispatch_ui_event_legacy(event_id, mapped, payload).await
     }
 
     pub async fn dispatch_plugin_message(&self, payload: String) -> Result<()> {

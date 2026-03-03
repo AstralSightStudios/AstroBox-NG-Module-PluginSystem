@@ -515,9 +515,7 @@ fn resolve_manifest_from_abp(package_raw: &[u8]) -> Result<PluginManifest> {
         file.read_to_string(&mut data)?;
         let manifest: PluginManifest = serde_json::from_str(&data)
             .context("Failed to resolve plugin manifest from plugin package")?;
-        if manifest.name.trim().is_empty() {
-            return Err(anyhow!("name is empty in package manifest"));
-        }
+        manifest.validate(std::path::Path::new("manifest.json (plugin package)"))?;
         return Ok(manifest);
     }
 

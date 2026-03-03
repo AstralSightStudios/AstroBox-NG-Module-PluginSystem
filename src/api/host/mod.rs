@@ -1,4 +1,4 @@
-use std::sync::Arc;
+﻿use std::sync::Arc;
 use std::path::PathBuf;
 
 use tauri::AppHandle;
@@ -100,3 +100,5 @@ mod timer;
 mod thirdpartyapp;
 mod transport;
 pub mod ui;
+pub mod v3;
+
