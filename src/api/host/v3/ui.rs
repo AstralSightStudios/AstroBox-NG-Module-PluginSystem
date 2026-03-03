@@ -747,6 +747,176 @@ impl psys_host::ui_v3::HostElement for PluginCtx {
         return_owned_element(self, self_)
     }
 
+    fn transform(
+        &mut self,
+        self_: Resource<Element>,
+        value: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("transform", value);
+        return_owned_element(self, self_)
+    }
+
+    fn transform_origin(
+        &mut self,
+        self_: Resource<Element>,
+        value: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("transform-origin", value);
+        return_owned_element(self, self_)
+    }
+
+    fn animation(
+        &mut self,
+        self_: Resource<Element>,
+        value: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("animation", value);
+        return_owned_element(self, self_)
+    }
+
+    fn animation_name(
+        &mut self,
+        self_: Resource<Element>,
+        name: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("animation-name", name);
+        return_owned_element(self, self_)
+    }
+
+    fn animation_duration_ms(
+        &mut self,
+        self_: Resource<Element>,
+        ms: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("animation-duration", format!("{}ms", ms));
+        return_owned_element(self, self_)
+    }
+
+    fn animation_delay_ms(
+        &mut self,
+        self_: Resource<Element>,
+        ms: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("animation-delay", format!("{}ms", ms));
+        return_owned_element(self, self_)
+    }
+
+    fn animation_easing(
+        &mut self,
+        self_: Resource<Element>,
+        easing: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("animation-timing-function", easing);
+        return_owned_element(self, self_)
+    }
+
+    fn animation_iteration_count(
+        &mut self,
+        self_: Resource<Element>,
+        count: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("animation-iteration-count", count);
+        return_owned_element(self, self_)
+    }
+
+    fn animation_direction(
+        &mut self,
+        self_: Resource<Element>,
+        direction: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("animation-direction", direction);
+        return_owned_element(self, self_)
+    }
+
+    fn animation_fill_mode(
+        &mut self,
+        self_: Resource<Element>,
+        fill_mode: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("animation-fill-mode", fill_mode);
+        return_owned_element(self, self_)
+    }
+
+    fn animation_play_state(
+        &mut self,
+        self_: Resource<Element>,
+        play_state: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("animation-play-state", play_state);
+        return_owned_element(self, self_)
+    }
+
+    fn animation_preset(
+        &mut self,
+        self_: Resource<Element>,
+        name: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("animation-preset", name);
+        return_owned_element(self, self_)
+    }
+
+    fn will_change(
+        &mut self,
+        self_: Resource<Element>,
+        value: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("will-change", value);
+        return_owned_element(self, self_)
+    }
+
+    fn filter(
+        &mut self,
+        self_: Resource<Element>,
+        value: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("filter", value);
+        return_owned_element(self, self_)
+    }
+
+    fn backdrop_filter(
+        &mut self,
+        self_: Resource<Element>,
+        value: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("backdrop-filter", value);
+        return_owned_element(self, self_)
+    }
+
+    fn perspective(
+        &mut self,
+        self_: Resource<Element>,
+        value: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("perspective", value);
+        return_owned_element(self, self_)
+    }
+
+    fn backface_visibility(
+        &mut self,
+        self_: Resource<Element>,
+        value: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("backface-visibility", value);
+        return_owned_element(self, self_)
+    }
+
     fn without_default_styles(
         &mut self,
         self_: Resource<Element>,
