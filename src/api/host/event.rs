@@ -6,6 +6,7 @@ impl psys_host::event::Host for PluginCtx {
     fn send_event(&mut self, event_name: HostString, payload: HostString) -> wasmtime::Result<()> {
         let event_name = event_name.to_string();
         let payload_raw = payload.to_string();
+        let source_plugin = self.plugin_name().to_string();
 
         let message = serde_json::json!({
             "eventName": event_name.clone(),
@@ -21,15 +22,18 @@ impl psys_host::event::Host for PluginCtx {
             let dispatch_payload = dispatch_payload;
             let dispatch_name = dispatch_name;
             let log_name = log_name;
+            let source_plugin = source_plugin;
             async move {
                 if let Err(err) = crate::with_plugin_manager_async({
                     let event_name = dispatch_name.clone();
                     let payload = dispatch_payload.clone();
+                    let source_plugin = source_plugin.clone();
                     move |pm| {
                         let active_plugins = pm
                             .plugins
                             .iter()
                             .filter(|(_, plugin)| plugin.state.loaded && !plugin.state.disabled)
+                            .filter(|(name, _)| name.as_str() != source_plugin.as_str())
                             .map(|(name, plugin)| (name.clone(), plugin.runtime.clone()))
                             .collect::<Vec<_>>();
                         let event_name = event_name.clone();

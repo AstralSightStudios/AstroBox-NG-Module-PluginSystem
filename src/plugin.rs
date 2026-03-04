@@ -784,6 +784,7 @@ impl PluginRuntime {
                 )
             })?;
         future.close(&mut instance.store);
+        tokio::task::yield_now().await;
         Ok(())
     }
 
@@ -803,6 +804,7 @@ impl PluginRuntime {
                 )
             })?;
         future.close(&mut instance.store);
+        tokio::task::yield_now().await;
         Ok(())
     }
 
@@ -822,6 +824,7 @@ impl PluginRuntime {
                 )
             })?;
         future.close(&mut instance.store);
+        tokio::task::yield_now().await;
         Ok(())
     }
 
@@ -851,6 +854,7 @@ impl PluginRuntime {
                 )
             })?;
         future.close(&mut instance.store);
+        tokio::task::yield_now().await;
         Ok(())
     }
 
@@ -886,6 +890,7 @@ impl PluginRuntime {
                 )
             })?;
         future.close(&mut instance.store);
+        tokio::task::yield_now().await;
         Ok(())
     }
 

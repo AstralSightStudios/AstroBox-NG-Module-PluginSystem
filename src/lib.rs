@@ -1,4 +1,4 @@
-﻿use anyhow::{Error, Result};
+﻿use anyhow::Result;
 use futures_util::FutureExt;
 use manager::PluginManager;
 use once_cell::sync::{Lazy, OnceCell};
@@ -239,19 +239,8 @@ where
     F: for<'pm> FnOnce(&'pm mut PluginManager) -> PluginManagerFuture<'pm, R> + Send + 'static,
     R: Send + 'static,
 {
-    if Some(thread::current().id()) == PLUGIN_THREAD_ID.get().copied() {
-        let fut = unsafe {
-            PM_IN_THREAD.with(|cell| {
-                let pm_ptr = cell
-                    .borrow()
-                    .ok_or_else(|| corelib::anyhow_site!("PluginManager TLS not set"))?
-                    as *mut PluginManager;
-                // Safety: 我们当前运行在插件线程内，pm_ptr 的独占访问得到保证
-                Ok::<PluginManagerFuture<'_, R>, Error>(f(&mut *pm_ptr))
-            })
-        }?;
-        return Ok(fut.await);
-    }
+    // 通过插件命令队列来路由异步工作。
+    // 这可以避免在之前的Guest任务仍在运行时重新进入PluginManager
 
     let (tx, rx) = oneshot::channel();
     let cmd = Command::Exec(Box::new(move |pm| {
@@ -271,3 +260,4 @@ where
     rx.await
         .map_err(|_| corelib::anyhow_site!("Plugin thread dropped the response"))
 }
+
