@@ -1,8 +1,17 @@
 use anyhow::Error;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    io::Write,
+    sync::{
+        Mutex as StdMutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 use tauri::AppHandle;
 use tauri_plugin_dialog::{DialogExt, FilePath, MessageDialogButtons, MessageDialogResult};
-use tauri_plugin_fs::FsExt;
+use tauri_plugin_fs::{FsExt, OpenOptions};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, FutureReader};
@@ -10,6 +19,14 @@ use wasmtime::component::{Accessor, FutureReader};
 use crate::bindings::astrobox::psys_host;
 
 use super::{HostString, HostVec, PluginCtx};
+
+struct SaveFileSession {
+    file: std::fs::File,
+}
+
+static SAVE_FILE_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+static SAVE_FILE_SESSIONS: Lazy<StdMutex<HashMap<(String, u64), SaveFileSession>>> =
+    Lazy::new(|| StdMutex::new(HashMap::new()));
 
 impl psys_host::dialog::Host for PluginCtx {
     fn open_url(&mut self, url: HostString) -> wasmtime::Result<()> {
@@ -77,6 +94,147 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
             };
             FutureReader::new(instance, &mut access, async move {
                 pick_file_with_dialog(app_handle, plugin_root, config, filter).await
+            })
+        });
+        async move { future }
+    }
+
+    fn save_file_start<T>(
+        accessor: &Accessor<T, Self>,
+        filter: psys_host::dialog::FilterConfig,
+    ) -> impl core::future::Future<
+        Output = FutureReader<core::result::Result<psys_host::dialog::SaveSession, ()>>,
+    > + Send {
+        let instance = accessor.instance();
+        let future = accessor.with(|mut access| {
+            let app_handle = {
+                let ctx = access.get();
+                ctx.app_handle()
+            };
+            let plugin_name = {
+                let ctx = access.get();
+                ctx.plugin_name().to_string()
+            };
+            FutureReader::new(instance, &mut access, async move {
+                let result = save_file_start_with_dialog(app_handle, plugin_name, filter).await;
+                Ok::<core::result::Result<psys_host::dialog::SaveSession, ()>, Error>(result)
+            })
+        });
+        async move { future }
+    }
+
+    fn save_file_write_chunk<T>(
+        accessor: &Accessor<T, Self>,
+        session_id: u64,
+        data: HostVec<u8>,
+    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
+        let instance = accessor.instance();
+        let future = accessor.with(|mut access| {
+            let plugin_name = {
+                let ctx = access.get();
+                ctx.plugin_name().to_string()
+            };
+            FutureReader::new(instance, &mut access, async move {
+                let key = (plugin_name.clone(), session_id);
+                let write_result = {
+                    let mut sessions = SAVE_FILE_SESSIONS
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner());
+                    if let Some(session) = sessions.get_mut(&key) {
+                        session.file.write_all(&data)
+                    } else {
+                        log::warn!(
+                            "dialog::save_file_write_chunk session not found: plugin={} session_id={}",
+                            plugin_name,
+                            session_id
+                        );
+                        return Ok::<core::result::Result<(), ()>, Error>(Err(()));
+                    }
+                };
+
+                if let Err(err) = write_result {
+                    log::error!(
+                        "dialog::save_file_write_chunk failed: plugin={} session_id={} err={err}",
+                        plugin_name,
+                        session_id
+                    );
+                    return Ok::<core::result::Result<(), ()>, Error>(Err(()));
+                }
+                Ok::<core::result::Result<(), ()>, Error>(Ok(()))
+            })
+        });
+        async move { future }
+    }
+
+    fn save_file_finish<T>(
+        accessor: &Accessor<T, Self>,
+        session_id: u64,
+    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
+        let instance = accessor.instance();
+        let future = accessor.with(|mut access| {
+            let plugin_name = {
+                let ctx = access.get();
+                ctx.plugin_name().to_string()
+            };
+            FutureReader::new(instance, &mut access, async move {
+                let key = (plugin_name.clone(), session_id);
+                let mut session = {
+                    let mut sessions = SAVE_FILE_SESSIONS
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner());
+                    sessions.remove(&key)
+                };
+
+                let Some(ref mut session) = session else {
+                    log::warn!(
+                        "dialog::save_file_finish session not found: plugin={} session_id={}",
+                        plugin_name,
+                        session_id
+                    );
+                    return Ok::<core::result::Result<(), ()>, Error>(Err(()));
+                };
+
+                if let Err(err) = session.file.flush() {
+                    log::error!(
+                        "dialog::save_file_finish flush failed: plugin={} session_id={} err={err}",
+                        plugin_name,
+                        session_id
+                    );
+                    return Ok::<core::result::Result<(), ()>, Error>(Err(()));
+                }
+
+                Ok::<core::result::Result<(), ()>, Error>(Ok(()))
+            })
+        });
+        async move { future }
+    }
+
+    fn save_file_abort<T>(
+        accessor: &Accessor<T, Self>,
+        session_id: u64,
+    ) -> impl core::future::Future<Output = FutureReader<()>> + Send {
+        let instance = accessor.instance();
+        let future = accessor.with(|mut access| {
+            let plugin_name = {
+                let ctx = access.get();
+                ctx.plugin_name().to_string()
+            };
+            FutureReader::new(instance, &mut access, async move {
+                let key = (plugin_name.clone(), session_id);
+                let removed = {
+                    let mut sessions = SAVE_FILE_SESSIONS
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner());
+                    sessions.remove(&key).is_some()
+                };
+                if !removed {
+                    log::warn!(
+                        "dialog::save_file_abort session not found: plugin={} session_id={}",
+                        plugin_name,
+                        session_id
+                    );
+                }
+                Ok::<(), Error>(())
             })
         });
         async move { future }
@@ -163,27 +321,8 @@ async fn pick_file_with_dialog(
     config: psys_host::dialog::PickConfig,
     filter: psys_host::dialog::FilterConfig,
 ) -> Result<psys_host::dialog::PickResult, Error> {
-    let mut builder = app_handle.dialog().file();
-    let psys_host::dialog::FilterConfig {
-        multiple,
-        extensions,
-        default_directory,
-        default_file_name,
-    } = filter;
-    let default_dir: String = default_directory.into();
-    if !default_dir.is_empty() {
-        builder = builder.set_directory(default_dir);
-    }
-    let default_file_name: String = default_file_name.into();
-    if !default_file_name.is_empty() {
-        builder = builder.set_file_name(default_file_name);
-    }
-
-    let extensions: Vec<String> = extensions.into_iter().map(Into::into).collect();
-    if !extensions.is_empty() {
-        let exts: Vec<&str> = extensions.iter().map(String::as_str).collect();
-        builder = builder.add_filter("files", &exts);
-    }
+    let multiple = filter.multiple;
+    let builder = configure_file_dialog_builder(app_handle.dialog().file(), filter);
 
     let (tx, rx) = oneshot::channel();
     if multiple {
@@ -246,15 +385,85 @@ async fn pick_file_with_dialog(
         }
     }
 
-    let data = if config.read {
-        file_data
-    } else {
-        Vec::new()
-    };
+    let data = if config.read { file_data } else { Vec::new() };
 
     Ok(psys_host::dialog::PickResult {
         name: file_name.into(),
         data,
+    })
+}
+
+fn configure_file_dialog_builder<R: tauri::Runtime>(
+    mut builder: tauri_plugin_dialog::FileDialogBuilder<R>,
+    filter: psys_host::dialog::FilterConfig,
+) -> tauri_plugin_dialog::FileDialogBuilder<R> {
+    let psys_host::dialog::FilterConfig {
+        extensions,
+        default_directory,
+        default_file_name,
+        ..
+    } = filter;
+
+    let default_dir: String = default_directory.into();
+    if !default_dir.is_empty() {
+        builder = builder.set_directory(default_dir);
+    }
+    let default_file_name: String = default_file_name.into();
+    if !default_file_name.is_empty() {
+        builder = builder.set_file_name(default_file_name);
+    }
+
+    let extensions: Vec<String> = extensions.into_iter().map(Into::into).collect();
+    if !extensions.is_empty() {
+        let exts: Vec<&str> = extensions.iter().map(String::as_str).collect();
+        builder = builder.add_filter("files", &exts);
+    }
+    builder
+}
+
+async fn save_file_start_with_dialog(
+    app_handle: AppHandle,
+    plugin_name: String,
+    filter: psys_host::dialog::FilterConfig,
+) -> core::result::Result<psys_host::dialog::SaveSession, ()> {
+    let builder = configure_file_dialog_builder(app_handle.dialog().file(), filter);
+    let (tx, rx) = oneshot::channel();
+    builder.save_file(move |path| {
+        let _ = tx.send(path);
+    });
+
+    let file_path = match rx.await {
+        Ok(Some(path)) => path,
+        Ok(None) => return Err(()),
+        Err(err) => {
+            log::error!("dialog::save_file_start waiting for selection failed: {err}");
+            return Err(());
+        }
+    };
+
+    let file_name = resolve_file_name(&file_path);
+    let mut options = OpenOptions::new();
+    options.read(false).write(true).create(true).truncate(true);
+
+    let file = match app_handle.fs().open(file_path, options) {
+        Ok(file) => file,
+        Err(err) => {
+            log::error!("dialog::save_file_start open target failed: {err}");
+            return Err(());
+        }
+    };
+
+    let session_id = SAVE_FILE_SESSION_ID.fetch_add(1, Ordering::Relaxed);
+    {
+        let mut sessions = SAVE_FILE_SESSIONS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        sessions.insert((plugin_name, session_id), SaveFileSession { file });
+    }
+
+    Ok(psys_host::dialog::SaveSession {
+        session_id,
+        name: file_name.into(),
     })
 }
 
@@ -413,7 +622,10 @@ struct WebsiteDialogResult {
 }
 
 impl WebsiteDialogPayload {
-    fn from(dialog_type: psys_host::dialog::DialogType, info: psys_host::dialog::DialogInfo) -> Self {
+    fn from(
+        dialog_type: psys_host::dialog::DialogType,
+        info: psys_host::dialog::DialogInfo,
+    ) -> Self {
         let dialog_type = match dialog_type {
             psys_host::dialog::DialogType::Alert => WebsiteDialogType::Alert,
             psys_host::dialog::DialogType::Input => WebsiteDialogType::Input,
@@ -430,7 +642,11 @@ impl From<psys_host::dialog::DialogInfo> for WebsiteDialogInfo {
         Self {
             title: info.title.into(),
             content: info.content.into(),
-            buttons: info.buttons.into_iter().map(WebsiteDialogButton::from).collect(),
+            buttons: info
+                .buttons
+                .into_iter()
+                .map(WebsiteDialogButton::from)
+                .collect(),
         }
     }
 }

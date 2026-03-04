@@ -1,14 +1,14 @@
-﻿use anyhow::Result;
+use anyhow::Result;
 use futures_util::FutureExt;
 use manager::PluginManager;
 use once_cell::sync::{Lazy, OnceCell};
+use serde::Serialize;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::{cell::RefCell, path::PathBuf, thread};
 use std::sync::Mutex;
+use std::{cell::RefCell, path::PathBuf, thread};
 use tauri::{AppHandle, Emitter};
-use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 
 pub mod api;
@@ -33,6 +33,10 @@ pub mod bindings {
             "astrobox:psys-host/transport/request": async | store,
             "astrobox:psys-host/dialog/show-dialog": async | store,
             "astrobox:psys-host/dialog/pick-file": async | store,
+            "astrobox:psys-host/dialog/save-file-start": async | store,
+            "astrobox:psys-host/dialog/save-file-write-chunk": async | store,
+            "astrobox:psys-host/dialog/save-file-finish": async | store,
+            "astrobox:psys-host/dialog/save-file-abort": async | store,
             "astrobox:psys-host/device/get-device-list": async | store,
             "astrobox:psys-host/device/get-connected-device-list": async | store,
             "astrobox:psys-host/device/disconnect-device": async | store,
@@ -260,4 +264,3 @@ where
     rx.await
         .map_err(|_| corelib::anyhow_site!("Plugin thread dropped the response"))
 }
-
