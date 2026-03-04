@@ -968,6 +968,22 @@ impl psys_host::ui_v3::HostElement for PluginCtx {
         return_owned_element(self, self_)
     }
 
+    fn autofocus(&mut self, self_: Resource<Element>) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("autofocus", "true".to_string());
+        return_owned_element(self, self_)
+    }
+
+    fn tab_index(
+        &mut self,
+        self_: Resource<Element>,
+        index: i32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("tab-index", index.to_string());
+        return_owned_element(self, self_)
+    }
+
     fn z_index(&mut self, self_: Resource<Element>, z: i32) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
         let _ = el.styles.insert("z-index", z.to_string());
