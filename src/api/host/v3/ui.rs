@@ -675,6 +675,48 @@ impl psys_host::ui_v3::HostElement for PluginCtx {
         return_owned_element(self, self_)
     }
 
+    fn scroll_top(
+        &mut self,
+        self_: Resource<Element>,
+        position: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("scroll-top", position.to_string());
+        return_owned_element(self, self_)
+    }
+
+    fn scroll_left(
+        &mut self,
+        self_: Resource<Element>,
+        position: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("scroll-left", position.to_string());
+        return_owned_element(self, self_)
+    }
+
+    fn scroll_to(
+        &mut self,
+        self_: Resource<Element>,
+        top: u32,
+        left: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("scroll-top", top.to_string());
+        let _ = el.styles.insert("scroll-left", left.to_string());
+        return_owned_element(self, self_)
+    }
+
+    fn scroll_behavior(
+        &mut self,
+        self_: Resource<Element>,
+        behavior: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.styles.insert("scroll-behavior", behavior);
+        return_owned_element(self, self_)
+    }
+
     fn flex_grow(&mut self, self_: Resource<Element>, value: f32) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
         let _ = el.styles.insert("flex-grow", value.to_string());
