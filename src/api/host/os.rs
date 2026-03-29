@@ -71,10 +71,9 @@ impl psys_host::os::HostWithStore for PluginCtx {
         let future = accessor.with(|mut access| {
             let app_handle = app_handle.clone();
             FutureReader::new(instance, &mut access, async move {
-                let appearance: String =
-                    invoke_frontend(&app_handle, FRONT_APPEARANCE_METHOD, ())
-                        .await
-                        .context("invoke frontend appearance")?;
+                let appearance: String = invoke_frontend(&app_handle, FRONT_APPEARANCE_METHOD, ())
+                    .await
+                    .context("invoke frontend appearance")?;
                 Ok::<HostString, Error>(appearance.into())
             })
         });

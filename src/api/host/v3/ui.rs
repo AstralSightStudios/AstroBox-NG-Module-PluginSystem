@@ -190,7 +190,9 @@ impl Into<ElementType> for psys_host::ui_v3::ElementType {
             psys_host::ui_v3::ElementType::ContextMenuTrigger => ElementType::CONTEXTMENUTRIGGER,
             psys_host::ui_v3::ElementType::ContextMenuContent => ElementType::CONTEXTMENUCONTENT,
             psys_host::ui_v3::ElementType::ContextMenuItem => ElementType::CONTEXTMENUITEM,
-            psys_host::ui_v3::ElementType::ContextMenuSeparator => ElementType::CONTEXTMENUSEPARATOR,
+            psys_host::ui_v3::ElementType::ContextMenuSeparator => {
+                ElementType::CONTEXTMENUSEPARATOR
+            }
             psys_host::ui_v3::ElementType::DialogRoot => ElementType::DIALOGROOT,
             psys_host::ui_v3::ElementType::DialogTrigger => ElementType::DIALOGTRIGGER,
             psys_host::ui_v3::ElementType::DialogContent => ElementType::DIALOGCONTENT,
@@ -201,7 +203,9 @@ impl Into<ElementType> for psys_host::ui_v3::ElementType {
             psys_host::ui_v3::ElementType::DropdownMenuTrigger => ElementType::DROPDOWNMENUTRIGGER,
             psys_host::ui_v3::ElementType::DropdownMenuContent => ElementType::DROPDOWNMENUCONTENT,
             psys_host::ui_v3::ElementType::DropdownMenuItem => ElementType::DROPDOWNMENUITEM,
-            psys_host::ui_v3::ElementType::DropdownMenuSeparator => ElementType::DROPDOWNMENUSEPARATOR,
+            psys_host::ui_v3::ElementType::DropdownMenuSeparator => {
+                ElementType::DROPDOWNMENUSEPARATOR
+            }
             psys_host::ui_v3::ElementType::Tooltip => ElementType::TOOLTIP,
             psys_host::ui_v3::ElementType::Checkbox => ElementType::CHECKBOX,
             psys_host::ui_v3::ElementType::Separator => ElementType::SEPARATOR,
@@ -210,7 +214,9 @@ impl Into<ElementType> for psys_host::ui_v3::ElementType {
             psys_host::ui_v3::ElementType::AlertDialogTrigger => ElementType::ALERTDIALOGTRIGGER,
             psys_host::ui_v3::ElementType::AlertDialogContent => ElementType::ALERTDIALOGCONTENT,
             psys_host::ui_v3::ElementType::AlertDialogTitle => ElementType::ALERTDIALOGTITLE,
-            psys_host::ui_v3::ElementType::AlertDialogDescription => ElementType::ALERTDIALOGDESCRIPTION,
+            psys_host::ui_v3::ElementType::AlertDialogDescription => {
+                ElementType::ALERTDIALOGDESCRIPTION
+            }
             psys_host::ui_v3::ElementType::AlertDialogAction => ElementType::ALERTDIALOGACTION,
             psys_host::ui_v3::ElementType::AlertDialogCancel => ElementType::ALERTDIALOGCANCEL,
         }
@@ -651,25 +657,41 @@ impl psys_host::ui_v3::HostElement for PluginCtx {
         return_owned_element(self, self_)
     }
 
-    fn max_width(&mut self, self_: Resource<Element>, width: u32) -> wasmtime::Result<Resource<Element>> {
+    fn max_width(
+        &mut self,
+        self_: Resource<Element>,
+        width: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
         let _ = el.styles.insert("max-width", format!("{}px", width));
         return_owned_element(self, self_)
     }
 
-    fn max_height(&mut self, self_: Resource<Element>, height: u32) -> wasmtime::Result<Resource<Element>> {
+    fn max_height(
+        &mut self,
+        self_: Resource<Element>,
+        height: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
         let _ = el.styles.insert("max-height", format!("{}px", height));
         return_owned_element(self, self_)
     }
 
-    fn min_width(&mut self, self_: Resource<Element>, width: u32) -> wasmtime::Result<Resource<Element>> {
+    fn min_width(
+        &mut self,
+        self_: Resource<Element>,
+        width: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
         let _ = el.styles.insert("min-width", format!("{}px", width));
         return_owned_element(self, self_)
     }
 
-    fn min_height(&mut self, self_: Resource<Element>, height: u32) -> wasmtime::Result<Resource<Element>> {
+    fn min_height(
+        &mut self,
+        self_: Resource<Element>,
+        height: u32,
+    ) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
         let _ = el.styles.insert("min-height", format!("{}px", height));
         return_owned_element(self, self_)
@@ -717,13 +739,21 @@ impl psys_host::ui_v3::HostElement for PluginCtx {
         return_owned_element(self, self_)
     }
 
-    fn flex_grow(&mut self, self_: Resource<Element>, value: f32) -> wasmtime::Result<Resource<Element>> {
+    fn flex_grow(
+        &mut self,
+        self_: Resource<Element>,
+        value: f32,
+    ) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
         let _ = el.styles.insert("flex-grow", value.to_string());
         return_owned_element(self, self_)
     }
 
-    fn flex_shrink(&mut self, self_: Resource<Element>, value: f32) -> wasmtime::Result<Resource<Element>> {
+    fn flex_shrink(
+        &mut self,
+        self_: Resource<Element>,
+        value: f32,
+    ) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
         let _ = el.styles.insert("flex-shrink", value.to_string());
         return_owned_element(self, self_)

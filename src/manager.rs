@@ -345,7 +345,10 @@ impl PluginManager {
             }
 
             if let Err(err) = runtime.dispatch_interconnect_message(payload.clone()).await {
-                log::error!("[plugin:{}] Failed to deliver interconnect message: {err}", name);
+                log::error!(
+                    "[plugin:{}] Failed to deliver interconnect message: {err}",
+                    name
+                );
             }
         }
     }

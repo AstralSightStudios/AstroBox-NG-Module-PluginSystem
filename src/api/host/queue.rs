@@ -1,10 +1,7 @@
 use crate::bindings::astrobox::psys_host;
 use serde_json::json;
 
-use super::{
-    HostString, PluginCtx,
-    permission::check_permission_declared_blocking,
-};
+use super::{HostString, PluginCtx, permission::check_permission_declared_blocking};
 
 impl psys_host::queue::Host for PluginCtx {
     fn add_resource_to_queue(
@@ -25,12 +22,7 @@ impl psys_host::queue::Host for PluginCtx {
             "resourceType": res_label,
             "filePath": file_path.to_string(),
         });
-        if !check_permission_declared_blocking(
-            &app_handle,
-            permissions.as_ref(),
-            "queue",
-            params,
-        ) {
+        if !check_permission_declared_blocking(&app_handle, permissions.as_ref(), "queue", params) {
             return Ok(());
         }
         Ok(())

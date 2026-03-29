@@ -1,8 +1,5 @@
 use anyhow::Error;
-use corelib::device::xiaomi::{
-    XiaomiDevice,
-    components::resource::ResourceComponent,
-};
+use corelib::device::xiaomi::{XiaomiDevice, components::resource::ResourceComponent};
 use frontbridge::invoke_frontend;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -144,10 +141,7 @@ pub(crate) async fn resolve_device_name(addr: &str) -> Option<String> {
     .await
 }
 
-pub(crate) async fn resolve_quick_app_name(
-    device_addr: &str,
-    pkg_name: &str,
-) -> Option<String> {
+pub(crate) async fn resolve_quick_app_name(device_addr: &str, pkg_name: &str) -> Option<String> {
     let device_addr = device_addr.trim();
     let pkg_name = pkg_name.trim();
     if device_addr.is_empty() || pkg_name.is_empty() {

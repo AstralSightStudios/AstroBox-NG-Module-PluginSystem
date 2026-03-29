@@ -100,8 +100,7 @@ impl psys_host::timer::HostWithStore for PluginCtx {
                     tokio::task::yield_now().await;
                     let delay_ms = delay_ms.max(1);
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                    let timer_payload =
-                        build_timer_payload(timer_id, TimerKind::Timeout, payload);
+                    let timer_payload = build_timer_payload(timer_id, TimerKind::Timeout, payload);
                     dispatch_timer_event(plugin_name, timer_id, timer_payload).await;
                     timer_state.remove_timer(timer_id);
                 });

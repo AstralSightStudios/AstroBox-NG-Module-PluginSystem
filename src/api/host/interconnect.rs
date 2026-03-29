@@ -1,19 +1,14 @@
 use crate::bindings::astrobox::psys_host;
 use anyhow::{Error, anyhow};
-use corelib::{
-    device::xiaomi::components::{
-        resource::ResourceComponent,
-        thirdparty_app::{AppInfo, ThirdpartyAppSystem},
-    },
+use corelib::device::xiaomi::components::{
+    resource::ResourceComponent,
+    thirdparty_app::{AppInfo, ThirdpartyAppSystem},
 };
 use log::error;
 use serde_json::json;
 use wasmtime::component::{Accessor, FutureReader};
 
-use super::{
-    HostString, PluginCtx,
-    permission::check_permission_declared,
-};
+use super::{HostString, PluginCtx, permission::check_permission_declared};
 
 impl psys_host::interconnect::Host for PluginCtx {}
 

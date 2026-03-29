@@ -46,13 +46,8 @@ impl psys_host::transport::HostWithStore for PluginCtx {
                     "addr": device_addr,
                     "deviceName": device_name,
                 });
-                if !check_permission_declared(
-                    &app_handle,
-                    permissions.as_ref(),
-                    "request",
-                    params,
-                )
-                .await
+                if !check_permission_declared(&app_handle, permissions.as_ref(), "request", params)
+                    .await
                 {
                     return Ok::<(), Error>(());
                 }
@@ -82,13 +77,8 @@ impl psys_host::transport::HostWithStore for PluginCtx {
                     "addr": device_addr,
                     "deviceName": device_name,
                 });
-                if !check_permission_declared(
-                    &app_handle,
-                    permissions.as_ref(),
-                    "request",
-                    params,
-                )
-                .await
+                if !check_permission_declared(&app_handle, permissions.as_ref(), "request", params)
+                    .await
                 {
                     return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(()));
                 }

@@ -25,8 +25,7 @@ impl psys_host::i18n::HostWithStore for PluginCtx {
     fn load_json<T>(
         accessor: &Accessor<T, Self>,
         content: HostString,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send
-    {
+    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
         let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());

@@ -1,17 +1,11 @@
 use crate::bindings::astrobox::psys_host;
 use anyhow::{Error, anyhow};
-use corelib::device::xiaomi::components::{
-    resource::ResourceSystem,
-    watchface::WatchfaceSystem,
-};
+use corelib::device::xiaomi::components::{resource::ResourceSystem, watchface::WatchfaceSystem};
 use log::error;
 use serde_json::json;
 use wasmtime::component::{Accessor, FutureReader};
 
-use crate::api::host::{
-    HostString, HostVec, PluginCtx,
-    permission::check_permission_declared,
-};
+use crate::api::host::{HostString, HostVec, PluginCtx, permission::check_permission_declared};
 
 impl psys_host::watchface::Host for PluginCtx {}
 
@@ -20,7 +14,9 @@ impl psys_host::watchface::HostWithStore for PluginCtx {
         accessor: &Accessor<T, Self>,
         addr: HostString,
     ) -> impl core::future::Future<
-        Output = FutureReader<core::result::Result<HostVec<psys_host::watchface::WatchfaceInfo>, ()>>,
+        Output = FutureReader<
+            core::result::Result<HostVec<psys_host::watchface::WatchfaceInfo>, ()>,
+        >,
     > + Send {
         let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
@@ -138,7 +134,10 @@ async fn get_watchface_list_impl(
     Ok(host_list)
 }
 
-async fn set_current_watchface_impl(device_addr: String, watchface_id: String) -> Result<(), Error> {
+async fn set_current_watchface_impl(
+    device_addr: String,
+    watchface_id: String,
+) -> Result<(), Error> {
     let watchface_id = watchface_id.trim().to_string();
     if watchface_id.is_empty() {
         return Err(anyhow!("watchface id is empty"));

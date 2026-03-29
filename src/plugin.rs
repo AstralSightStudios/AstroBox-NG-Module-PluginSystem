@@ -1,10 +1,13 @@
-﻿use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::Read;
-use std::pin::Pin;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex, atomic::{AtomicU64, Ordering}};
+use std::pin::Pin;
+use std::sync::{
+    Arc, Mutex as StdMutex,
+    atomic::{AtomicU64, Ordering},
+};
 use std::task::{Context as TaskContext, Poll};
 
 use anyhow::{Context, Result};
@@ -298,18 +301,12 @@ impl AsyncWrite for PluginStdioStream {
         Poll::Ready(Ok(buf.len()))
     }
 
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        _cx: &mut TaskContext<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
         self.flush_pending();
         Poll::Ready(Ok(()))
     }
 
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        _cx: &mut TaskContext<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
         self.flush_pending();
         Poll::Ready(Ok(()))
     }
@@ -599,16 +596,10 @@ impl PluginRuntime {
         log::info!("[plugin:{}] Creating wasmtime engine...", plugin_name);
         let engine = create_engine()?;
 
-        log::info!(
-            "[plugin:{}] Ensuring precompiled component...",
-            plugin_name
-        );
+        log::info!("[plugin:{}] Ensuring precompiled component...", plugin_name);
         let artifact_path = ensure_precompiled_component(&engine, path, manifest, &entry_path)?;
 
-        log::info!(
-            "[plugin:{}] Loading precompiled component...",
-            plugin_name
-        );
+        log::info!("[plugin:{}] Loading precompiled component...", plugin_name);
         let component = unsafe {
             // SAFETY: `artifact_path` is produced via `Engine::precompile_component` with
             // the same engine configuration, satisfying Wasmtime's deserialize requirements.
@@ -712,7 +703,10 @@ impl PluginRuntime {
 
         {
             let mut guard = self.instance.lock().await;
-            *guard = Some(PluginInstance { store, world: instance });
+            *guard = Some(PluginInstance {
+                store,
+                world: instance,
+            });
         }
 
         Ok(())
@@ -770,9 +764,9 @@ impl PluginRuntime {
         payload: String,
     ) -> Result<()> {
         let mut guard = self.instance.lock().await;
-        let instance = guard.as_mut().ok_or_else(|| {
-            anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name)
-        })?;
+        let instance = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
         let event_iface = instance.world.astrobox_psys_plugin_event();
         let mut future = event_iface
             .call_on_event(&mut instance.store, event_type, payload.as_str())
@@ -790,9 +784,9 @@ impl PluginRuntime {
 
     pub async fn dispatch_ui_render(&self, element_id: String) -> Result<()> {
         let mut guard = self.instance.lock().await;
-        let instance = guard.as_mut().ok_or_else(|| {
-            anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name)
-        })?;
+        let instance = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
         let event_iface = instance.world.astrobox_psys_plugin_event();
         let mut future = event_iface
             .call_on_ui_render(&mut instance.store, element_id.as_str())
@@ -810,9 +804,9 @@ impl PluginRuntime {
 
     pub async fn dispatch_card_render(&self, element_id: String) -> Result<()> {
         let mut guard = self.instance.lock().await;
-        let instance = guard.as_mut().ok_or_else(|| {
-            anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name)
-        })?;
+        let instance = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
         let event_iface = instance.world.astrobox_psys_plugin_event();
         let mut future = event_iface
             .call_on_card_render(&mut instance.store, element_id.as_str())
@@ -835,9 +829,9 @@ impl PluginRuntime {
         payload: String,
     ) -> Result<()> {
         let mut guard = self.instance.lock().await;
-        let instance = guard.as_mut().ok_or_else(|| {
-            anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name)
-        })?;
+        let instance = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
         let event_iface = instance.world.astrobox_psys_plugin_event();
         let mut future = event_iface
             .call_on_ui_event(
@@ -865,9 +859,9 @@ impl PluginRuntime {
         payload: String,
     ) -> Result<()> {
         let mut guard = self.instance.lock().await;
-        let instance = guard.as_mut().ok_or_else(|| {
-            anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name)
-        })?;
+        let instance = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
         let event_iface = instance.world.astrobox_psys_plugin_event();
         let wrapped_payload = serde_json::json!({
             "kind": "ui-event-v3",
@@ -914,7 +908,8 @@ impl PluginRuntime {
                 event
             )
         })?;
-        self.dispatch_ui_event_legacy(event_id, mapped, payload).await
+        self.dispatch_ui_event_legacy(event_id, mapped, payload)
+            .await
     }
 
     pub async fn dispatch_plugin_message(&self, payload: String) -> Result<()> {
@@ -923,11 +918,8 @@ impl PluginRuntime {
     }
 
     pub async fn dispatch_interconnect_message(&self, payload: String) -> Result<()> {
-        self.dispatch_event(
-            psys_plugin::event::EventType::InterconnectMessage,
-            payload,
-        )
-        .await
+        self.dispatch_event(psys_plugin::event::EventType::InterconnectMessage, payload)
+            .await
     }
 
     pub async fn matches_interconnect(&self, addr: &str, pkg_name: &str) -> bool {

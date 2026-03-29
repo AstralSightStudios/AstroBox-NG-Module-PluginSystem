@@ -2,15 +2,12 @@ use crate::bindings::astrobox::psys_host;
 use anyhow::{Context, Error};
 use corelib::device::xiaomi::XiaomiDevice;
 use frontbridge::invoke_frontend;
-use serde_json::json;
 use serde::Deserialize;
+use serde_json::json;
 use tauri::Manager;
 use wasmtime::component::{Accessor, FutureReader};
 
-use super::{
-    HostString, HostVec, PluginCtx,
-    permission::check_permission_declared,
-};
+use super::{HostString, HostVec, PluginCtx, permission::check_permission_declared};
 
 const FRONT_DEVICE_LIST_METHOD: &str = "host/device/get_device_list";
 
@@ -45,10 +42,7 @@ impl psys_host::device::HostWithStore for PluginCtx {
         let future = accessor.with(|mut access| {
             let app_handle = app_handle.clone();
             FutureReader::new(instance, &mut access, async move {
-                log::info!(
-                    "[plugin:{}] device list request (history)",
-                    plugin_name
-                );
+                log::info!("[plugin:{}] device list request (history)", plugin_name);
                 if !check_permission_declared(
                     &app_handle,
                     permissions.as_ref(),
@@ -57,9 +51,7 @@ impl psys_host::device::HostWithStore for PluginCtx {
                 )
                 .await
                 {
-                    return Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(
-                        HostVec::new(),
-                    );
+                    return Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(HostVec::new());
                 }
 
                 let devices: Vec<StoredDeviceRecord> =
@@ -94,10 +86,7 @@ impl psys_host::device::HostWithStore for PluginCtx {
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {
-                log::info!(
-                    "[plugin:{}] connected device list request",
-                    plugin_name
-                );
+                log::info!("[plugin:{}] connected device list request", plugin_name);
                 if !check_permission_declared(
                     &app_handle,
                     permissions.as_ref(),
@@ -106,9 +95,7 @@ impl psys_host::device::HostWithStore for PluginCtx {
                 )
                 .await
                 {
-                    return Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(
-                        HostVec::new(),
-                    );
+                    return Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(HostVec::new());
                 }
 
                 let ret = corelib::ecs::with_rt_mut(|rt| {
@@ -173,7 +160,10 @@ impl psys_host::device::HostWithStore for PluginCtx {
                 );
 
                 if let Err(err) = window.eval(script.as_str()) {
-                    log::warn!("[plugin:{}] disconnect_device eval failed: {err}", plugin_name);
+                    log::warn!(
+                        "[plugin:{}] disconnect_device eval failed: {err}",
+                        plugin_name
+                    );
                     return Ok::<core::result::Result<(), ()>, Error>(Err(()));
                 }
 

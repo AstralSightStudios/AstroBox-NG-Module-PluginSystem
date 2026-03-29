@@ -8,10 +8,7 @@ use log::error;
 use serde_json::json;
 use wasmtime::component::{Accessor, FutureReader};
 
-use super::{
-    HostString, HostVec, PluginCtx,
-    permission::check_permission_declared,
-};
+use super::{HostString, HostVec, PluginCtx, permission::check_permission_declared};
 
 impl psys_host::thirdpartyapp::Host for PluginCtx {}
 

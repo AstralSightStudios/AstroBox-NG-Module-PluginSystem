@@ -1,5 +1,5 @@
-﻿use std::sync::Arc;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tauri::AppHandle;
 use wasmtime::component::ResourceTable;
@@ -90,15 +90,14 @@ impl wasmtime::component::HasData for PluginCtx {
 mod device;
 mod dialog;
 mod event;
-mod interconnect;
 mod i18n;
+mod interconnect;
 mod os;
 mod permission;
 mod queue;
 mod register;
-mod timer;
 mod thirdpartyapp;
+mod timer;
 mod transport;
 pub mod ui;
 pub mod v3;
-
