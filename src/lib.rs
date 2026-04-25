@@ -64,6 +64,7 @@ pub mod bindings {
 pub mod manager;
 pub mod manifest;
 pub mod plugin;
+mod transport_runtime;
 
 pub const PLUGINSYSTEM_READY_EVENT: &str = "astrobox://pluginsystem/ready";
 pub const PLUGINSYSTEM_PROGRESS_EVENT: &str = "astrobox://pluginsystem/progress";

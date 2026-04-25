@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, anyhow};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use frontbridge::invoke_frontend;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -9,6 +10,7 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 use zip::ZipArchive;
 
+use crate::bindings::astrobox::psys_host;
 use crate::manifest::PluginManifest;
 use crate::plugin::{CardRegistration, Plugin, PluginData, purge_precompiled_component};
 use crate::{PLUGINSYSTEM_PROGRESS_EVENT, PluginSystemProgressPayload};
@@ -18,6 +20,15 @@ pub struct PluginManager {
     app_handle: AppHandle,
     pub plugins: HashMap<String, Plugin>,
     pub updated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RegisteredProviderDescriptor {
+    pub name: String,
+    #[serde(rename = "pluginName")]
+    pub plugin_name: String,
+    #[serde(rename = "providerType")]
+    pub provider_type: String,
 }
 
 const FRONT_STORAGE_GET_JSON_METHOD: &str = "host/storage/local/get_json";
@@ -41,6 +52,13 @@ struct LocalStorageAck {
 }
 
 impl PluginManager {
+    fn provider_type_label(provider_type: &psys_host::register::ProviderType) -> &'static str {
+        match provider_type {
+            psys_host::register::ProviderType::Url => "url",
+            psys_host::register::ProviderType::Custom => "custom",
+        }
+    }
+
     fn emit_progress(&self, plugin: &str, stage: &str, detail: Option<String>) {
         let payload = PluginSystemProgressPayload {
             plugin: plugin.to_string(),
@@ -353,6 +371,48 @@ impl PluginManager {
         }
     }
 
+    pub async fn dispatch_transport_packet(
+        &mut self,
+        addr: &str,
+        channel_id: u32,
+        protobuf_type_id: Option<u32>,
+        protobuf_packet_id: Option<u32>,
+        payload: Vec<u8>,
+    ) {
+        crate::transport_runtime::fulfill_request_waiters(
+            addr,
+            channel_id,
+            protobuf_type_id,
+            protobuf_packet_id,
+            &payload,
+        );
+
+        let mut active_plugins = self
+            .plugins
+            .iter()
+            .filter(|(_, plugin)| plugin.state.loaded && !plugin.state.disabled)
+            .map(|(name, plugin)| (name.clone(), plugin.runtime.clone()))
+            .collect::<Vec<_>>();
+        active_plugins.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let payload_base64 = BASE64_STANDARD.encode(&payload);
+        for (name, runtime) in active_plugins {
+            if !runtime
+                .matches_transport(addr, channel_id, protobuf_type_id)
+                .await
+            {
+                continue;
+            }
+
+            if let Err(err) = runtime
+                .dispatch_transport_packet(payload_base64.clone())
+                .await
+            {
+                log::error!("[plugin:{}] Failed to deliver transport packet: {err}", name);
+            }
+        }
+    }
+
     pub async fn disable(&mut self, name: &String) -> bool {
         log::info!("[plugin:{}] Disable requested", name);
         self.updated = true;
@@ -450,6 +510,84 @@ impl PluginManager {
             cards.extend(plugin.runtime.list_cards().await);
         }
         cards
+    }
+
+    pub async fn list_providers(&self) -> Vec<RegisteredProviderDescriptor> {
+        let mut providers = Vec::new();
+        let mut seen = HashSet::new();
+        let mut active_plugins = self
+            .plugins
+            .iter()
+            .filter(|(_, plugin)| plugin.state.loaded && !plugin.state.disabled)
+            .map(|(name, plugin)| (name.clone(), plugin.runtime.clone()))
+            .collect::<Vec<_>>();
+        active_plugins.sort_by(|left, right| left.0.cmp(&right.0));
+
+        for (plugin_name, runtime) in active_plugins {
+            for registration in runtime.list_providers().await {
+                if !seen.insert(registration.name.clone()) {
+                    log::warn!(
+                        "[pluginsystem] duplicate provider registration ignored: provider={}, plugin={}",
+                        registration.name,
+                        plugin_name
+                    );
+                    continue;
+                }
+
+                providers.push(RegisteredProviderDescriptor {
+                    name: registration.name,
+                    plugin_name: plugin_name.clone(),
+                    provider_type: Self::provider_type_label(&registration.provider_type)
+                        .to_string(),
+                });
+            }
+        }
+
+        providers
+    }
+
+    pub async fn call_provider_action(&self, provider_name: &str, payload: String) -> Result<String> {
+        let mut active_plugins = self
+            .plugins
+            .iter()
+            .filter(|(_, plugin)| plugin.state.loaded && !plugin.state.disabled)
+            .map(|(name, plugin)| (name.clone(), plugin.runtime.clone()))
+            .collect::<Vec<_>>();
+        active_plugins.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut matches = Vec::new();
+        for (plugin_name, runtime) in active_plugins {
+            if runtime
+                .list_providers()
+                .await
+                .into_iter()
+                .any(|registration| registration.name == provider_name)
+            {
+                matches.push((plugin_name, runtime));
+            }
+        }
+
+        if matches.len() > 1 {
+            log::warn!(
+                "[pluginsystem] provider '{}' is registered by multiple plugins; using '{}'",
+                provider_name,
+                matches[0].0
+            );
+        }
+
+        let Some((plugin_name, runtime)) = matches.into_iter().next() else {
+            return Err(anyhow!("Plugin provider '{}' not found", provider_name));
+        };
+
+        runtime
+            .dispatch_provider_action(payload)
+            .await
+            .with_context(|| {
+                format!(
+                    "Plugin provider action failed. provider={}, plugin={}",
+                    provider_name, plugin_name
+                )
+            })
     }
 
     pub fn list(&self) -> Vec<PluginManifest> {
