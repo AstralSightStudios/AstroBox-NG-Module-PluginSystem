@@ -16,6 +16,8 @@ pub struct Element {
     r#type: ElementType,
     content: Option<String>,
     event_listeners: Vec<EventListener>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    props: HashMap<String, String>,
     styles: HashMap<&'static str, String>,
     width: Option<u32>,
     height: Option<u32>,
@@ -90,9 +92,6 @@ enum ElementType {
     GRID,
     #[serde(rename = "SCROLL_AREA")]
     SCROLLAREA,
-    LIST,
-    #[serde(rename = "LIST_ITEM")]
-    LISTITEM,
     CODE,
     CARD,
     #[serde(rename = "TABS_ROOT")]
@@ -103,8 +102,6 @@ enum ElementType {
     TABSTRIGGER,
     #[serde(rename = "TABS_CONTENT")]
     TABSCONTENT,
-    ICON,
-    DIVIDER,
     #[serde(rename = "CONTEXT_MENU_ROOT")]
     CONTEXTMENUROOT,
     #[serde(rename = "CONTEXT_MENU_TRIGGER")]
@@ -141,20 +138,6 @@ enum ElementType {
     CHECKBOX,
     SEPARATOR,
     BADGE,
-    #[serde(rename = "ALERT_DIALOG_ROOT")]
-    ALERTDIALOGROOT,
-    #[serde(rename = "ALERT_DIALOG_TRIGGER")]
-    ALERTDIALOGTRIGGER,
-    #[serde(rename = "ALERT_DIALOG_CONTENT")]
-    ALERTDIALOGCONTENT,
-    #[serde(rename = "ALERT_DIALOG_TITLE")]
-    ALERTDIALOGTITLE,
-    #[serde(rename = "ALERT_DIALOG_DESCRIPTION")]
-    ALERTDIALOGDESCRIPTION,
-    #[serde(rename = "ALERT_DIALOG_ACTION")]
-    ALERTDIALOGACTION,
-    #[serde(rename = "ALERT_DIALOG_CANCEL")]
-    ALERTDIALOGCANCEL,
 }
 impl Into<ElementType> for psys_host::ui_v3::ElementType {
     fn into(self) -> ElementType {
@@ -176,16 +159,12 @@ impl Into<ElementType> for psys_host::ui_v3::ElementType {
             psys_host::ui_v3::ElementType::P => ElementType::P,
             psys_host::ui_v3::ElementType::Grid => ElementType::GRID,
             psys_host::ui_v3::ElementType::ScrollArea => ElementType::SCROLLAREA,
-            psys_host::ui_v3::ElementType::List => ElementType::LIST,
-            psys_host::ui_v3::ElementType::ListItem => ElementType::LISTITEM,
             psys_host::ui_v3::ElementType::Code => ElementType::CODE,
             psys_host::ui_v3::ElementType::Card => ElementType::CARD,
             psys_host::ui_v3::ElementType::TabsRoot => ElementType::TABSROOT,
             psys_host::ui_v3::ElementType::TabsList => ElementType::TABSLIST,
             psys_host::ui_v3::ElementType::TabsTrigger => ElementType::TABSTRIGGER,
             psys_host::ui_v3::ElementType::TabsContent => ElementType::TABSCONTENT,
-            psys_host::ui_v3::ElementType::Icon => ElementType::ICON,
-            psys_host::ui_v3::ElementType::Divider => ElementType::DIVIDER,
             psys_host::ui_v3::ElementType::ContextMenuRoot => ElementType::CONTEXTMENUROOT,
             psys_host::ui_v3::ElementType::ContextMenuTrigger => ElementType::CONTEXTMENUTRIGGER,
             psys_host::ui_v3::ElementType::ContextMenuContent => ElementType::CONTEXTMENUCONTENT,
@@ -210,15 +189,6 @@ impl Into<ElementType> for psys_host::ui_v3::ElementType {
             psys_host::ui_v3::ElementType::Checkbox => ElementType::CHECKBOX,
             psys_host::ui_v3::ElementType::Separator => ElementType::SEPARATOR,
             psys_host::ui_v3::ElementType::Badge => ElementType::BADGE,
-            psys_host::ui_v3::ElementType::AlertDialogRoot => ElementType::ALERTDIALOGROOT,
-            psys_host::ui_v3::ElementType::AlertDialogTrigger => ElementType::ALERTDIALOGTRIGGER,
-            psys_host::ui_v3::ElementType::AlertDialogContent => ElementType::ALERTDIALOGCONTENT,
-            psys_host::ui_v3::ElementType::AlertDialogTitle => ElementType::ALERTDIALOGTITLE,
-            psys_host::ui_v3::ElementType::AlertDialogDescription => {
-                ElementType::ALERTDIALOGDESCRIPTION
-            }
-            psys_host::ui_v3::ElementType::AlertDialogAction => ElementType::ALERTDIALOGACTION,
-            psys_host::ui_v3::ElementType::AlertDialogCancel => ElementType::ALERTDIALOGCANCEL,
         }
     }
 }
@@ -233,6 +203,7 @@ impl Element {
                 .collect(),
             r#type: type_,
             content,
+            props: HashMap::new(),
             styles: HashMap::new(),
             width: None,
             height: None,
@@ -325,6 +296,17 @@ impl psys_host::ui_v3::HostElement for PluginCtx {
     ) -> wasmtime::Result<Resource<Element>> {
         let el = self.table.get_mut(&self_)?;
         el.content = content;
+        return_owned_element(self, self_)
+    }
+
+    fn prop(
+        &mut self,
+        self_: Resource<Element>,
+        name: String,
+        value: String,
+    ) -> wasmtime::Result<Resource<Element>> {
+        let el = self.table.get_mut(&self_)?;
+        let _ = el.props.insert(name, value);
         return_owned_element(self, self_)
     }
 

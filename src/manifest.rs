@@ -20,7 +20,6 @@ pub struct PluginManifest {
     pub additional_files: Vec<String>, // 插件附加文件列表
     #[serde(
         default,
-        rename = "enableSettingsButton",
         skip_serializing_if = "Option::is_none"
     )]
     pub enable_settings_button: Option<bool>, // 是否在插件窗口右上角显示设置按钮
