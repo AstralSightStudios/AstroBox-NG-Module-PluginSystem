@@ -93,6 +93,7 @@ mod event;
 mod i18n;
 mod interconnect;
 mod os;
+mod provider_callback;
 mod permission;
 mod queue;
 mod register;

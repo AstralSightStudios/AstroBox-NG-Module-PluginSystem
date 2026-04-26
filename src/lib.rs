@@ -58,12 +58,13 @@ pub mod bindings {
         },
         exports: {
             default: async,
-        },
+        }
     });
 }
 pub mod manager;
 pub mod manifest;
 pub mod plugin;
+pub mod provider_action_bridge;
 mod transport_runtime;
 
 pub const PLUGINSYSTEM_READY_EVENT: &str = "astrobox://pluginsystem/ready";

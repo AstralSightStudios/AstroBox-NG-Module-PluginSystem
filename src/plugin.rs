@@ -10,21 +10,21 @@ use std::sync::{
 };
 use std::task::{Context as TaskContext, Poll};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use corelib::device::xiaomi::packet::v2::layer2::L2Channel;
 use hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWrite;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use wasmtime::component::{Component, FutureConsumer, Linker, Source};
-use wasmtime::{Config, Engine, Store, StoreContextMut};
+use wasmtime::component::{Component, Linker};
+use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, p2};
 
-use crate::api::host::{HostString, PluginCtx};
+use crate::api::host::PluginCtx;
 use crate::bindings::{PsysWorld, astrobox::psys_host, exports::astrobox::psys_plugin};
 use crate::manifest::PluginManifest;
 use crate::{PLUGINSYSTEM_PROGRESS_EVENT, PluginSystemProgressPayload};
@@ -593,60 +593,6 @@ struct PluginInstance {
     world: PsysWorld,
 }
 
-struct StringFutureConsumer {
-    sender: Option<oneshot::Sender<Result<String>>>,
-    plugin_name: String,
-    event_name: String,
-}
-
-impl StringFutureConsumer {
-    fn finish(&mut self, result: Result<String>) {
-        if let Some(sender) = self.sender.take() {
-            let _ = sender.send(result);
-        }
-    }
-}
-
-impl FutureConsumer<PluginCtx> for StringFutureConsumer {
-    type Item = HostString;
-
-    fn poll_consume(
-        mut self: Pin<&mut Self>,
-        _cx: &mut TaskContext<'_>,
-        store: StoreContextMut<PluginCtx>,
-        mut source: Source<'_, Self::Item>,
-        finish: bool,
-    ) -> Poll<Result<()>> {
-        let mut value = None;
-        if let Err(err) = source.read(store, &mut value) {
-            let err = err.context(format!(
-                "Failed to read plugin future result. plugin={}, event={}",
-                self.plugin_name, self.event_name
-            ));
-            self.finish(Err(anyhow!("{err:#}")));
-            return Poll::Ready(Err(err));
-        }
-
-        if let Some(value) = value {
-            self.finish(Ok(value.to_string()));
-            return Poll::Ready(Ok(()));
-        }
-
-        if finish {
-            let plugin_name = self.plugin_name.clone();
-            let event_name = self.event_name.clone();
-            self.finish(Err(anyhow!(
-                "Plugin event future finished without a return value. plugin={}, event={}",
-                plugin_name,
-                event_name
-            )));
-            return Poll::Ready(Ok(()));
-        }
-
-        Poll::Pending
-    }
-}
-
 impl PluginRuntime {
     fn normalize_permissions(raw: &[String]) -> Vec<String> {
         raw.iter()
@@ -871,39 +817,6 @@ impl PluginRuntime {
         Ok(())
     }
 
-    pub async fn dispatch_event_with_result(
-        &self,
-        event_type: psys_plugin::event::EventType,
-        payload: String,
-    ) -> Result<String> {
-        let mut guard = self.instance.lock().await;
-        let instance = guard
-            .as_mut()
-            .ok_or_else(|| anyhow!("Plugin '{}' instance is not initialized", self.name))?;
-        let event_iface = instance.world.astrobox_psys_plugin_event();
-        let event_name = format!("{event_type:?}");
-        let future = event_iface
-            .call_on_event(&mut instance.store, event_type, payload.as_str())
-            .await
-            .map_err(|e| {
-                anyhow!(
-                    "Failed to start the plugin on-event callback. detail: {}",
-                    e
-                )
-            })?;
-        let (tx, rx) = oneshot::channel();
-        future.pipe(
-            &mut instance.store,
-            StringFutureConsumer {
-                sender: Some(tx),
-                plugin_name: self.name.clone(),
-                event_name,
-            },
-        );
-        rx.await
-            .map_err(|_| anyhow!("Plugin event future reader was dropped"))?
-    }
-
     pub async fn dispatch_ui_render(&self, element_id: String) -> Result<()> {
         let mut guard = self.instance.lock().await;
         let instance = guard
@@ -1049,8 +962,8 @@ impl PluginRuntime {
             .await
     }
 
-    pub async fn dispatch_provider_action(&self, payload: String) -> Result<String> {
-        self.dispatch_event_with_result(psys_plugin::event::EventType::ProviderAction, payload)
+    pub async fn dispatch_provider_action(&self, payload: String) -> Result<()> {
+        self.dispatch_event(psys_plugin::event::EventType::ProviderAction, payload)
             .await
     }
 

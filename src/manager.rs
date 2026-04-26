@@ -546,7 +546,7 @@ impl PluginManager {
         providers
     }
 
-    pub async fn call_provider_action(&self, provider_name: &str, payload: String) -> Result<String> {
+    pub async fn call_provider_action(&self, provider_name: &str, payload: String) -> Result<()> {
         let mut active_plugins = self
             .plugins
             .iter()
