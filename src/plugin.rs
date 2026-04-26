@@ -26,6 +26,7 @@ use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, p2};
 
 use crate::api::host::PluginCtx;
 use crate::bindings::{PsysWorld, astrobox::psys_host, exports::astrobox::psys_plugin};
+use crate::bindings_v3::{PsysWorldV3, exports::astrobox::psys_plugin::event_v3 as psys_plugin_v3};
 use crate::manifest::PluginManifest;
 use crate::{PLUGINSYSTEM_PROGRESS_EVENT, PluginSystemProgressPayload};
 
@@ -588,9 +589,15 @@ pub struct PluginRuntime {
     instance: Arc<Mutex<Option<PluginInstance>>>,
 }
 
-struct PluginInstance {
-    store: Store<PluginCtx>,
-    world: PsysWorld,
+enum PluginInstance {
+    V2 {
+        store: Store<PluginCtx>,
+        world: PsysWorld,
+    },
+    V3 {
+        store: Store<PluginCtx>,
+        world: PsysWorldV3,
+    },
 }
 
 impl PluginRuntime {
@@ -719,6 +726,32 @@ impl PluginRuntime {
             let mut guard = self.instance.lock().await;
             *guard = None;
         }
+        if self.api_level >= 3 {
+            let instance = PsysWorldV3::instantiate_async(&mut store, &self.component, &linker)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to instantiate plugin component for api_level=3. detail: {}",
+                        e.to_string()
+                    )
+                })?;
+
+            log::info!("[plugin:{}] Calling on_load...", self.name.clone());
+            self.emit_progress("on_load", None);
+            let lifecycle = instance.astrobox_psys_plugin_lifecycle();
+            lifecycle
+                .call_on_load(&mut store)
+                .await
+                .context("Failed to execute the plugin on-load callback")?;
+
+            let mut guard = self.instance.lock().await;
+            *guard = Some(PluginInstance::V3 {
+                store,
+                world: instance,
+            });
+            return Ok(());
+        }
+
         let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
             .await
             .map_err(|e| {
@@ -736,13 +769,11 @@ impl PluginRuntime {
             .await
             .context("Failed to execute the plugin on-load callback")?;
 
-        {
-            let mut guard = self.instance.lock().await;
-            *guard = Some(PluginInstance {
-                store,
-                world: instance,
-            });
-        }
+        let mut guard = self.instance.lock().await;
+        *guard = Some(PluginInstance::V2 {
+            store,
+            world: instance,
+        });
 
         Ok(())
     }
@@ -793,6 +824,26 @@ impl PluginRuntime {
         }
     }
 
+    fn map_ui_event_to_api3(event: &str) -> Option<crate::bindings_v3::astrobox::psys_host::ui_v3::Event> {
+        match Self::compact_ui_event(event).as_str() {
+            "CLICK" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::Click),
+            "HOVER" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::Hover),
+            "CHANGE" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::Change),
+            "INPUT" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::Input),
+            "FOCUS" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::Focus),
+            "BLUR" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::Blur),
+            "MOUSEENTER" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::MouseEnter),
+            "MOUSELEAVE" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::MouseLeave),
+            "POINTERDOWN" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::PointerDown),
+            "POINTERUP" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::PointerUp),
+            "POINTERMOVE" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::PointerMove),
+            "KEYDOWN" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::KeyDown),
+            "KEYUP" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::KeyUp),
+            "LONGPRESS" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::LongPress),
+            _ => None,
+        }
+    }
+
     pub async fn dispatch_event(
         &self,
         event_type: psys_plugin::event::EventType,
@@ -802,17 +853,60 @@ impl PluginRuntime {
         let instance = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
-        let event_iface = instance.world.astrobox_psys_plugin_event();
-        let mut future = event_iface
-            .call_on_event(&mut instance.store, event_type, payload.as_str())
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to start the plugin on-event callback. detail: {}",
-                    e.to_string()
-                )
-            })?;
-        future.close(&mut instance.store);
+        match instance {
+            PluginInstance::V2 { store, world } => {
+                let event_iface = world.astrobox_psys_plugin_event();
+                let mut future = event_iface
+                    .call_on_event(&mut *store, event_type, payload.as_str())
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to start the plugin on-event callback. detail: {}",
+                            e.to_string()
+                        )
+                    })?;
+                future.close(store);
+            }
+            PluginInstance::V3 { store, world } => {
+                let event_iface = world.astrobox_psys_plugin_event_v3();
+                let mut future = event_iface
+                    .call_on_event(
+                        &mut *store,
+                        match event_type {
+                            psys_plugin::event::EventType::PluginMessage => {
+                                psys_plugin_v3::EventType::PluginMessage
+                            }
+                            psys_plugin::event::EventType::InterconnectMessage => {
+                                psys_plugin_v3::EventType::InterconnectMessage
+                            }
+                            psys_plugin::event::EventType::DeviceAction => {
+                                psys_plugin_v3::EventType::DeviceAction
+                            }
+                            psys_plugin::event::EventType::ProviderAction => {
+                                psys_plugin_v3::EventType::ProviderAction
+                            }
+                            psys_plugin::event::EventType::DeeplinkAction => {
+                                psys_plugin_v3::EventType::DeeplinkAction
+                            }
+                            psys_plugin::event::EventType::TransportPacket => {
+                                psys_plugin_v3::EventType::TransportPacket
+                            }
+                            psys_plugin::event::EventType::Timer => {
+                                psys_plugin_v3::EventType::Timer
+                            }
+                        },
+                        payload.as_str(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to start the plugin on-event-v3 callback. detail: {}",
+                            e.to_string()
+                        )
+                    })?;
+                future.close(store);
+            }
+        }
         tokio::task::yield_now().await;
         Ok(())
     }
@@ -822,17 +916,34 @@ impl PluginRuntime {
         let instance = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
-        let event_iface = instance.world.astrobox_psys_plugin_event();
-        let mut future = event_iface
-            .call_on_ui_render(&mut instance.store, element_id.as_str())
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to start the plugin on-ui-render callback. detail: {}",
-                    e.to_string()
-                )
-            })?;
-        future.close(&mut instance.store);
+        match instance {
+            PluginInstance::V2 { store, world } => {
+                let event_iface = world.astrobox_psys_plugin_event();
+                let mut future = event_iface
+                    .call_on_ui_render(&mut *store, element_id.as_str())
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to start the plugin on-ui-render callback. detail: {}",
+                            e.to_string()
+                        )
+                    })?;
+                future.close(store);
+            }
+            PluginInstance::V3 { store, world } => {
+                let event_iface = world.astrobox_psys_plugin_event_v3();
+                let mut future = event_iface
+                    .call_on_ui_render(&mut *store, element_id.as_str())
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to start the plugin on-ui-render-v3 callback. detail: {}",
+                            e.to_string()
+                        )
+                    })?;
+                future.close(store);
+            }
+        }
         tokio::task::yield_now().await;
         Ok(())
     }
@@ -842,17 +953,34 @@ impl PluginRuntime {
         let instance = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
-        let event_iface = instance.world.astrobox_psys_plugin_event();
-        let mut future = event_iface
-            .call_on_card_render(&mut instance.store, element_id.as_str())
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to start the plugin on-card-render callback. detail: {}",
-                    e.to_string()
-                )
-            })?;
-        future.close(&mut instance.store);
+        match instance {
+            PluginInstance::V2 { store, world } => {
+                let event_iface = world.astrobox_psys_plugin_event();
+                let mut future = event_iface
+                    .call_on_card_render(&mut *store, element_id.as_str())
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to start the plugin on-card-render callback. detail: {}",
+                            e.to_string()
+                        )
+                    })?;
+                future.close(store);
+            }
+            PluginInstance::V3 { store, world } => {
+                let event_iface = world.astrobox_psys_plugin_event_v3();
+                let mut future = event_iface
+                    .call_on_card_render(&mut *store, element_id.as_str())
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to start the plugin on-card-render-v3 callback. detail: {}",
+                            e.to_string()
+                        )
+                    })?;
+                future.close(store);
+            }
+        }
         tokio::task::yield_now().await;
         Ok(())
     }
@@ -867,14 +995,15 @@ impl PluginRuntime {
         let instance = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
-        let event_iface = instance.world.astrobox_psys_plugin_event();
+        let PluginInstance::V2 { store, world } = instance else {
+            return Err(anyhow::anyhow!(
+                "Plugin '{}' api_level=3 should not use legacy on-ui-event",
+                self.name
+            ));
+        };
+        let event_iface = world.astrobox_psys_plugin_event();
         let mut future = event_iface
-            .call_on_ui_event(
-                &mut instance.store,
-                event_id.as_str(),
-                event,
-                payload.as_str(),
-            )
+            .call_on_ui_event(&mut *store, event_id.as_str(), event, payload.as_str())
             .await
             .map_err(|e| {
                 anyhow::anyhow!(
@@ -882,35 +1011,30 @@ impl PluginRuntime {
                     e.to_string()
                 )
             })?;
-        future.close(&mut instance.store);
+        future.close(store);
         tokio::task::yield_now().await;
         Ok(())
     }
 
-    async fn dispatch_ui_event_v3_string(
+    async fn dispatch_ui_event_v3(
         &self,
         event_id: String,
-        event_name: String,
+        event: crate::bindings_v3::astrobox::psys_host::ui_v3::Event,
         payload: String,
     ) -> Result<()> {
         let mut guard = self.instance.lock().await;
         let instance = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
-        let event_iface = instance.world.astrobox_psys_plugin_event();
-        let wrapped_payload = serde_json::json!({
-            "kind": "ui-event-v3",
-            "event_id": event_id,
-            "event": event_name,
-            "event_payload": payload,
-        })
-        .to_string();
+        let PluginInstance::V3 { store, world } = instance else {
+            return Err(anyhow::anyhow!(
+                "Plugin '{}' api_level<3 should not use on-ui-event-v3",
+                self.name
+            ));
+        };
+        let event_iface = world.astrobox_psys_plugin_event_v3();
         let mut future = event_iface
-            .call_on_event(
-                &mut instance.store,
-                psys_plugin::event::EventType::PluginMessage,
-                wrapped_payload.as_str(),
-            )
+            .call_on_ui_event_v3(&mut *store, event_id.as_str(), event, payload.as_str())
             .await
             .map_err(|e| {
                 anyhow::anyhow!(
@@ -918,7 +1042,7 @@ impl PluginRuntime {
                     e.to_string()
                 )
             })?;
-        future.close(&mut instance.store);
+        future.close(store);
         tokio::task::yield_now().await;
         Ok(())
     }
@@ -929,18 +1053,25 @@ impl PluginRuntime {
         event: String,
         payload: String,
     ) -> Result<()> {
+        let normalized = Self::normalize_ui_event_name(&event);
         if self.api_level >= 3 {
-            let normalized = Self::normalize_ui_event_name(&event);
+            let mapped = Self::map_ui_event_to_api3(&normalized).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Unknown ui-v3 event type for api_level={}: {}",
+                    self.api_level,
+                    normalized
+                )
+            })?;
             return self
-                .dispatch_ui_event_v3_string(event_id, normalized, payload)
+                .dispatch_ui_event_v3(event_id, mapped, payload)
                 .await;
         }
 
-        let mapped = Self::map_ui_event_to_api2(&event).ok_or_else(|| {
+        let mapped = Self::map_ui_event_to_api2(&normalized).ok_or_else(|| {
             anyhow::anyhow!(
                 "Unknown ui event type for api_level={}: {}",
                 self.api_level,
-                event
+                normalized
             )
         })?;
         self.dispatch_ui_event_legacy(event_id, mapped, payload)

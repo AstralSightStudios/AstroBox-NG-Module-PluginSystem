@@ -61,6 +61,54 @@ pub mod bindings {
         }
     });
 }
+pub mod bindings_v3 {
+    wasmtime::component::bindgen!({
+        path: "wit",
+        world: "psys-world-v3",
+        with:{
+            "astrobox:psys-host/ui-v3/element": crate::api::host::v3::ui::Element,
+        },
+        imports: {
+            "astrobox:psys-host/os/arch": async | store,
+            "astrobox:psys-host/os/hostname": async | store,
+            "astrobox:psys-host/os/locale": async | store,
+            "astrobox:psys-host/os/platform": async | store,
+            "astrobox:psys-host/os/version": async | store,
+            "astrobox:psys-host/os/astrobox-language": async | store,
+            "astrobox:psys-host/os/appearance": async | store,
+            "astrobox:psys-host/os/timezone-offset-minutes": async | store,
+            "astrobox:psys-host/transport/send": async | store,
+            "astrobox:psys-host/transport/request": async | store,
+            "astrobox:psys-host/dialog/show-dialog": async | store,
+            "astrobox:psys-host/dialog/pick-file": async | store,
+            "astrobox:psys-host/dialog/save-file-start": async | store,
+            "astrobox:psys-host/dialog/save-file-write-chunk": async | store,
+            "astrobox:psys-host/dialog/save-file-finish": async | store,
+            "astrobox:psys-host/dialog/save-file-abort": async | store,
+            "astrobox:psys-host/device/get-device-list": async | store,
+            "astrobox:psys-host/device/get-connected-device-list": async | store,
+            "astrobox:psys-host/device/disconnect-device": async | store,
+            "astrobox:psys-host/register/register-transport-recv": async | store,
+            "astrobox:psys-host/register/register-interconnect-recv": async | store,
+            "astrobox:psys-host/register/register-deeplink-action": async | store,
+            "astrobox:psys-host/register/register-provider": async | store,
+            "astrobox:psys-host/register/register-card": async | store,
+            "astrobox:psys-host/timer/set-timeout": async | store,
+            "astrobox:psys-host/timer/set-interval": async | store,
+            "astrobox:psys-host/timer/clear-timer": async | store,
+            "astrobox:psys-host/interconnect/send-qaic-message": async | store,
+            "astrobox:psys-host/thirdpartyapp/launch-qa": async | store,
+            "astrobox:psys-host/thirdpartyapp/get-thirdparty-app-list": async | store,
+            "astrobox:psys-host/watchface/get-watchface-list": async | store,
+            "astrobox:psys-host/watchface/set-current-watchface": async | store,
+            "astrobox:psys-host/i18n/load-json": async | store,
+            default: trappable
+        },
+        exports: {
+            default: async,
+        }
+    });
+}
 pub mod manager;
 pub mod manifest;
 pub mod plugin;
