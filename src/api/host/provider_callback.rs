@@ -36,4 +36,42 @@ impl psys_host::provider_callback::Host for PluginCtx {
 
         Ok(resolved)
     }
+
+    fn report_provider_action_progress(
+        &mut self,
+        request_id: HostString,
+        progress: f32,
+        status: HostString,
+    ) -> wasmtime::Result<bool> {
+        let request_id = request_id.to_string();
+        let status = status.to_string();
+        let plugin_name = self.plugin_name().to_string();
+        let accepted = provider_action_bridge::report_pending_provider_action_progress(
+            &request_id,
+            progress,
+            status.clone(),
+        );
+
+        if accepted {
+            log::debug!(
+                target: "pluginsystem::provider_action",
+                "[provider-action] progress plugin={}, request_id={}, progress={}, status={}",
+                plugin_name,
+                request_id,
+                progress,
+                status,
+            );
+        } else {
+            log::warn!(
+                target: "pluginsystem::provider_action",
+                "[provider-action] progress dropped plugin={}, request_id={}, progress={}, status={}",
+                plugin_name,
+                request_id,
+                progress,
+                status,
+            );
+        }
+
+        Ok(accepted)
+    }
 }
