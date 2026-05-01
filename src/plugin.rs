@@ -19,8 +19,8 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWrite;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use wasmtime::component::{Component, Linker};
-use wasmtime::{Config, Engine, Store};
+use wasmtime::component::{Component, FutureConsumer, Linker, Source};
+use wasmtime::{Config, Engine, Store, StoreContextMut};
 use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, p2};
 
@@ -600,6 +600,42 @@ enum PluginInstance {
     },
 }
 
+struct DrainStringFuture;
+
+impl<D> FutureConsumer<D> for DrainStringFuture {
+    type Item = String;
+
+    fn poll_consume(
+        self: Pin<&mut Self>,
+        _cx: &mut TaskContext<'_>,
+        store: StoreContextMut<D>,
+        mut source: Source<'_, Self::Item>,
+        _finish: bool,
+    ) -> Poll<Result<()>> {
+        let mut value = None;
+        source.read(store, &mut value)?;
+        Poll::Ready(Ok(()))
+    }
+}
+
+struct DrainUnitFuture;
+
+impl<D> FutureConsumer<D> for DrainUnitFuture {
+    type Item = ();
+
+    fn poll_consume(
+        self: Pin<&mut Self>,
+        _cx: &mut TaskContext<'_>,
+        store: StoreContextMut<D>,
+        mut source: Source<'_, Self::Item>,
+        _finish: bool,
+    ) -> Poll<Result<()>> {
+        let mut value = None;
+        source.read(store, &mut value)?;
+        Poll::Ready(Ok(()))
+    }
+}
+
 impl PluginRuntime {
     fn normalize_permissions(raw: &[String]) -> Vec<String> {
         raw.iter()
@@ -856,7 +892,7 @@ impl PluginRuntime {
         match instance {
             PluginInstance::V2 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event();
-                let mut future = event_iface
+                let future = event_iface
                     .call_on_event(&mut *store, event_type, payload.as_str())
                     .await
                     .map_err(|e| {
@@ -865,11 +901,11 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                future.close(store);
+                future.pipe(&mut *store, DrainStringFuture);
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
-                let mut future = event_iface
+                let future = event_iface
                     .call_on_event(
                         &mut *store,
                         match event_type {
@@ -904,7 +940,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                future.close(store);
+                future.pipe(&mut *store, DrainStringFuture);
             }
         }
         tokio::task::yield_now().await;
@@ -919,7 +955,7 @@ impl PluginRuntime {
         match instance {
             PluginInstance::V2 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event();
-                let mut future = event_iface
+                let future = event_iface
                     .call_on_ui_render(&mut *store, element_id.as_str())
                     .await
                     .map_err(|e| {
@@ -928,11 +964,11 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                future.close(store);
+                future.pipe(&mut *store, DrainUnitFuture);
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
-                let mut future = event_iface
+                let future = event_iface
                     .call_on_ui_render(&mut *store, element_id.as_str())
                     .await
                     .map_err(|e| {
@@ -941,7 +977,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                future.close(store);
+                future.pipe(&mut *store, DrainUnitFuture);
             }
         }
         tokio::task::yield_now().await;
@@ -956,7 +992,7 @@ impl PluginRuntime {
         match instance {
             PluginInstance::V2 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event();
-                let mut future = event_iface
+                let future = event_iface
                     .call_on_card_render(&mut *store, element_id.as_str())
                     .await
                     .map_err(|e| {
@@ -965,11 +1001,11 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                future.close(store);
+                future.pipe(&mut *store, DrainUnitFuture);
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
-                let mut future = event_iface
+                let future = event_iface
                     .call_on_card_render(&mut *store, element_id.as_str())
                     .await
                     .map_err(|e| {
@@ -978,7 +1014,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                future.close(store);
+                future.pipe(&mut *store, DrainUnitFuture);
             }
         }
         tokio::task::yield_now().await;
@@ -1002,7 +1038,7 @@ impl PluginRuntime {
             ));
         };
         let event_iface = world.astrobox_psys_plugin_event();
-        let mut future = event_iface
+        let future = event_iface
             .call_on_ui_event(&mut *store, event_id.as_str(), event, payload.as_str())
             .await
             .map_err(|e| {
@@ -1011,7 +1047,7 @@ impl PluginRuntime {
                     e.to_string()
                 )
             })?;
-        future.close(store);
+        future.pipe(&mut *store, DrainStringFuture);
         tokio::task::yield_now().await;
         Ok(())
     }
@@ -1033,7 +1069,7 @@ impl PluginRuntime {
             ));
         };
         let event_iface = world.astrobox_psys_plugin_event_v3();
-        let mut future = event_iface
+        let future = event_iface
             .call_on_ui_event_v3(&mut *store, event_id.as_str(), event, payload.as_str())
             .await
             .map_err(|e| {
@@ -1042,7 +1078,7 @@ impl PluginRuntime {
                     e.to_string()
                 )
             })?;
-        future.close(store);
+        future.pipe(&mut *store, DrainStringFuture);
         tokio::task::yield_now().await;
         Ok(())
     }
