@@ -495,11 +495,11 @@ fn ensure_precompiled_component(
                 entry_wasm.display()
             )
         })?;
-        let compiled = engine.precompile_component(&wasm_bytes).map_err(|err| {
-            anyhow::Error::from(err.context(format!(
+        let compiled = engine.precompile_component(&wasm_bytes).with_context(|| {
+            format!(
                 "failed to precompile component for plugin {}",
                 manifest.name
-            )))
+            )
         })?;
 
         fs::write(&artifact_path, compiled).with_context(|| {
@@ -554,10 +554,10 @@ fn create_engine() -> Result<Engine> {
     config
         .wasm_memory64(false)
         .wasm_component_model(true)
-        .wasm_component_model_async(true);
+        .wasm_component_model_async(true)
+        .async_support(true);
 
-    Engine::new(&config)
-        .map_err(|err| anyhow::Error::from(err.context("Failed to initialize the Wasmtime engine")))
+    Engine::new(&config).context("Failed to initialize the Wasmtime engine")
 }
 
 fn emit_pluginsystem_progress(
@@ -611,7 +611,7 @@ impl<D> FutureConsumer<D> for DrainStringFuture {
         store: StoreContextMut<D>,
         mut source: Source<'_, Self::Item>,
         _finish: bool,
-    ) -> Poll<wasmtime::Result<()>> {
+    ) -> Poll<Result<()>> {
         let mut value = None;
         source.read(store, &mut value)?;
         Poll::Ready(Ok(()))
@@ -629,7 +629,7 @@ impl<D> FutureConsumer<D> for DrainUnitFuture {
         store: StoreContextMut<D>,
         mut source: Source<'_, Self::Item>,
         _finish: bool,
-    ) -> Poll<wasmtime::Result<()>> {
+    ) -> Poll<Result<()>> {
         let mut value = None;
         source.read(store, &mut value)?;
         Poll::Ready(Ok(()))
@@ -680,11 +680,11 @@ impl PluginRuntime {
         let component = unsafe {
             // SAFETY: `artifact_path` is produced via `Engine::precompile_component` with
             // the same engine configuration, satisfying Wasmtime's deserialize requirements.
-            Component::deserialize_file(&engine, &artifact_path).map_err(|err| {
-                anyhow::Error::from(err.context(format!(
+            Component::deserialize_file(&engine, &artifact_path).with_context(|| {
+                format!(
                     "Failed to load precompiled plugin component: {}",
                     artifact_path.display()
-                )))
+                )
             })?
         };
 
@@ -708,11 +708,11 @@ impl PluginRuntime {
 
         builder
             .preopened_dir(&self.plugin_root, ".", DirPerms::all(), FilePerms::all())
-            .map_err(|err| {
-                anyhow::Error::from(err.context(format!(
+            .with_context(|| {
+                format!(
                     "Failed to pre-open directory for plugin: {}",
                     self.plugin_root.display()
-                )))
+                )
             })?;
 
         Ok(builder.build())
@@ -735,17 +735,14 @@ impl PluginRuntime {
 
     fn build_linker(&self) -> Result<Linker<PluginCtx>> {
         let mut linker = Linker::new(&self.engine);
-        p2::add_to_linker_async(&mut linker).map_err(|err| {
-            anyhow::Error::from(err.context("Failed to register the WASI interface with Linker"))
-        })?;
+        p2::add_to_linker_async(&mut linker)
+            .context("Failed to register the WASI interface with Linker")?;
 
-        wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker).map_err(|err| {
-            anyhow::Error::from(err.context("Failed to register wasi-http with Linker"))
-        })?;
+        wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
+            .context("Failed to register wasi-http with Linker")?;
 
-        PsysWorld::add_to_linker::<PluginCtx, PluginCtx>(&mut linker, |ctx| ctx).map_err(
-            |err| anyhow::Error::from(err.context("Failed to register the plugin host interface")),
-        )?;
+        PsysWorld::add_to_linker::<PluginCtx, PluginCtx>(&mut linker, |ctx| ctx)
+            .context("Failed to register the plugin host interface")?;
 
         Ok(linker)
     }
@@ -778,9 +775,10 @@ impl PluginRuntime {
             log::info!("[plugin:{}] Calling on_load...", self.name.clone());
             self.emit_progress("on_load", None);
             let lifecycle = instance.astrobox_psys_plugin_lifecycle();
-            lifecycle.call_on_load(&mut store).await.map_err(|err| {
-                anyhow::Error::from(err.context("Failed to execute the plugin on-load callback"))
-            })?;
+            lifecycle
+                .call_on_load(&mut store)
+                .await
+                .context("Failed to execute the plugin on-load callback")?;
 
             let mut guard = self.instance.lock().await;
             *guard = Some(PluginInstance::V3 {
@@ -802,9 +800,10 @@ impl PluginRuntime {
         log::info!("[plugin:{}] Calling on_load...", self.name.clone());
         self.emit_progress("on_load", None);
         let lifecycle = instance.astrobox_psys_plugin_lifecycle();
-        lifecycle.call_on_load(&mut store).await.map_err(|err| {
-            anyhow::Error::from(err.context("Failed to execute the plugin on-load callback"))
-        })?;
+        lifecycle
+            .call_on_load(&mut store)
+            .await
+            .context("Failed to execute the plugin on-load callback")?;
 
         let mut guard = self.instance.lock().await;
         *guard = Some(PluginInstance::V2 {
@@ -861,9 +860,7 @@ impl PluginRuntime {
         }
     }
 
-    fn map_ui_event_to_api3(
-        event: &str,
-    ) -> Option<crate::bindings_v3::astrobox::psys_host::ui_v3::Event> {
+    fn map_ui_event_to_api3(event: &str) -> Option<crate::bindings_v3::astrobox::psys_host::ui_v3::Event> {
         match Self::compact_ui_event(event).as_str() {
             "CLICK" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::Click),
             "HOVER" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::Hover),
@@ -873,13 +870,9 @@ impl PluginRuntime {
             "BLUR" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::Blur),
             "MOUSEENTER" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::MouseEnter),
             "MOUSELEAVE" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::MouseLeave),
-            "POINTERDOWN" => {
-                Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::PointerDown)
-            }
+            "POINTERDOWN" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::PointerDown),
             "POINTERUP" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::PointerUp),
-            "POINTERMOVE" => {
-                Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::PointerMove)
-            }
+            "POINTERMOVE" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::PointerMove),
             "KEYDOWN" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::KeyDown),
             "KEYUP" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::KeyUp),
             "LONGPRESS" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::LongPress),
@@ -908,7 +901,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                let _ = future.pipe(&mut *store, DrainStringFuture);
+                future.pipe(&mut *store, DrainStringFuture);
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
@@ -947,7 +940,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                let _ = future.pipe(&mut *store, DrainStringFuture);
+                future.pipe(&mut *store, DrainStringFuture);
             }
         }
         tokio::task::yield_now().await;
@@ -971,7 +964,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                let _ = future.pipe(&mut *store, DrainUnitFuture);
+                future.pipe(&mut *store, DrainUnitFuture);
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
@@ -984,7 +977,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                let _ = future.pipe(&mut *store, DrainUnitFuture);
+                future.pipe(&mut *store, DrainUnitFuture);
             }
         }
         tokio::task::yield_now().await;
@@ -1008,7 +1001,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                let _ = future.pipe(&mut *store, DrainUnitFuture);
+                future.pipe(&mut *store, DrainUnitFuture);
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
@@ -1021,7 +1014,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                let _ = future.pipe(&mut *store, DrainUnitFuture);
+                future.pipe(&mut *store, DrainUnitFuture);
             }
         }
         tokio::task::yield_now().await;
@@ -1054,7 +1047,7 @@ impl PluginRuntime {
                     e.to_string()
                 )
             })?;
-        let _ = future.pipe(&mut *store, DrainStringFuture);
+        future.pipe(&mut *store, DrainStringFuture);
         tokio::task::yield_now().await;
         Ok(())
     }
@@ -1085,7 +1078,7 @@ impl PluginRuntime {
                     e.to_string()
                 )
             })?;
-        let _ = future.pipe(&mut *store, DrainStringFuture);
+        future.pipe(&mut *store, DrainStringFuture);
         tokio::task::yield_now().await;
         Ok(())
     }
@@ -1105,7 +1098,9 @@ impl PluginRuntime {
                     normalized
                 )
             })?;
-            return self.dispatch_ui_event_v3(event_id, mapped, payload).await;
+            return self
+                .dispatch_ui_event_v3(event_id, mapped, payload)
+                .await;
         }
 
         let mapped = Self::map_ui_event_to_api2(&normalized).ok_or_else(|| {
