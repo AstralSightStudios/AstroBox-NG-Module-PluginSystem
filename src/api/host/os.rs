@@ -1,120 +1,74 @@
 use crate::bindings::astrobox::psys_host;
-use anyhow::{Context, Error};
 use chrono::Local;
-use frontbridge::invoke_frontend;
-use wasmtime::component::{Accessor, FutureReader};
+use wasmtime::component::{Access, FutureReader};
 
-use super::{HostString, PluginCtx};
-
-const FRONT_LANGUAGE_METHOD: &str = "host/os/astrobox_language";
-const FRONT_APPEARANCE_METHOD: &str = "host/os/appearance";
+use super::{HostString, PluginCtx, ReadyFuture};
 
 impl psys_host::os::Host for PluginCtx {}
 
 impl psys_host::os::HostWithStore for PluginCtx {
-    fn arch<T>(
-        accessor: &Accessor<T, Self>,
-    ) -> impl core::future::Future<Output = FutureReader<HostString>> + Send {
-        make_string_future(accessor, || std::env::consts::ARCH.to_string())
+    fn arch<T>(mut store: Access<'_, T, Self>) -> FutureReader<HostString> {
+        make_string_future(&mut store, || std::env::consts::ARCH.to_string())
     }
 
-    fn hostname<T>(
-        accessor: &Accessor<T, Self>,
-    ) -> impl core::future::Future<Output = FutureReader<HostString>> + Send {
-        make_string_future(accessor, || {
+    fn hostname<T>(mut store: Access<'_, T, Self>) -> FutureReader<HostString> {
+        make_string_future(&mut store, || {
             whoami::hostname().unwrap_or_else(|_| "unknown-host".to_string())
         })
     }
 
-    fn locale<T>(
-        accessor: &Accessor<T, Self>,
-    ) -> impl core::future::Future<Output = FutureReader<HostString>> + Send {
-        make_string_future(accessor, || {
+    fn locale<T>(mut store: Access<'_, T, Self>) -> FutureReader<HostString> {
+        make_string_future(&mut store, || {
             sys_locale::get_locale().unwrap_or_else(|| "en-US".to_string())
         })
     }
 
-    fn platform<T>(
-        accessor: &Accessor<T, Self>,
-    ) -> impl core::future::Future<Output = FutureReader<HostString>> + Send {
-        make_string_future(accessor, || os_info::get().os_type().to_string())
+    fn platform<T>(mut store: Access<'_, T, Self>) -> FutureReader<HostString> {
+        make_string_future(&mut store, || os_info::get().os_type().to_string())
     }
 
-    fn version<T>(
-        accessor: &Accessor<T, Self>,
-    ) -> impl core::future::Future<Output = FutureReader<HostString>> + Send {
-        make_string_future(accessor, || os_info::get().version().to_string())
+    fn version<T>(mut store: Access<'_, T, Self>) -> FutureReader<HostString> {
+        make_string_future(&mut store, || os_info::get().version().to_string())
     }
 
-    fn astrobox_language<T>(
-        accessor: &Accessor<T, Self>,
-    ) -> impl core::future::Future<Output = FutureReader<HostString>> + Send {
-        let app_handle = accessor.with(|mut access| access.get().app_handle());
-        let future = accessor.with(|mut access| {
-            let app_handle = app_handle.clone();
-            FutureReader::new(
-                &mut access,
-                crate::api::host::AnyhowFuture(async move {
-                    let language: String = invoke_frontend(&app_handle, FRONT_LANGUAGE_METHOD, ())
-                        .await
-                        .context("invoke frontend astrobox_language")?;
-                    Ok::<HostString, Error>(language.into())
-                }),
-            )
-        });
-        async move { future.expect("failed to create host future reader") }
+    fn astrobox_language<T>(mut store: Access<'_, T, Self>) -> FutureReader<HostString> {
+        let future = FutureReader::new(
+            &mut store,
+            ReadyFuture::ok(default_astrobox_language().into()),
+        );
+        future.expect("failed to create host future reader")
     }
 
-    fn appearance<T>(
-        accessor: &Accessor<T, Self>,
-    ) -> impl core::future::Future<Output = FutureReader<HostString>> + Send {
-        let app_handle = accessor.with(|mut access| access.get().app_handle());
-        let future = accessor.with(|mut access| {
-            let app_handle = app_handle.clone();
-            FutureReader::new(
-                &mut access,
-                crate::api::host::AnyhowFuture(async move {
-                    let appearance: String =
-                        invoke_frontend(&app_handle, FRONT_APPEARANCE_METHOD, ())
-                            .await
-                            .context("invoke frontend appearance")?;
-                    Ok::<HostString, Error>(appearance.into())
-                }),
-            )
-        });
-        async move { future.expect("failed to create host future reader") }
+    fn appearance<T>(mut store: Access<'_, T, Self>) -> FutureReader<HostString> {
+        let future = FutureReader::new(&mut store, ReadyFuture::ok("dark".to_string().into()));
+        future.expect("failed to create host future reader")
     }
 
-    fn timezone_offset_minutes<T>(
-        accessor: &Accessor<T, Self>,
-    ) -> impl core::future::Future<Output = FutureReader<i32>> + Send {
-        let future = accessor.with(|mut access| {
-            FutureReader::new(
-                &mut access,
-                crate::api::host::AnyhowFuture(async move {
-                    let offset_seconds = Local::now().offset().local_minus_utc();
-                    Ok::<i32, Error>(offset_seconds / 60)
-                }),
-            )
-        });
-        async move { future.expect("failed to create host future reader") }
+    fn timezone_offset_minutes<T>(mut store: Access<'_, T, Self>) -> FutureReader<i32> {
+        let offset_seconds = Local::now().offset().local_minus_utc();
+        let future = FutureReader::new(&mut store, ReadyFuture::ok(offset_seconds / 60));
+        future.expect("failed to create host future reader")
     }
 }
 
 fn make_string_future<T, F>(
-    accessor: &Accessor<T, PluginCtx>,
+    store: &mut Access<'_, T, PluginCtx>,
     producer: F,
-) -> impl core::future::Future<Output = FutureReader<HostString>> + Send
+) -> FutureReader<HostString>
 where
     F: FnOnce() -> String + Send + 'static,
 {
-    let future = accessor.with(|mut access| {
-        FutureReader::new(
-            &mut access,
-            crate::api::host::AnyhowFuture(
-                async move { Ok::<HostString, Error>(producer().into()) },
-            ),
-        )
-    });
-    async move { future.expect("failed to create host future reader") }
+    let future = FutureReader::new(store, ReadyFuture::ok(producer().into()));
+    future.expect("failed to create host future reader")
+}
+
+fn default_astrobox_language() -> String {
+    let locale = sys_locale::get_locale()
+        .unwrap_or_default()
+        .replace('-', "_");
+    match locale.as_str() {
+        "zh_CN" | "zh_HK" | "zh_TW" | "en_US" | "ja" | "lzh" | "hi" | "pt_BR" | "ru" | "zh_Cat"
+        | "zh_Meme" => locale,
+        _ => "en_US".to_string(),
+    }
 }

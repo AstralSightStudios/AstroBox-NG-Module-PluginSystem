@@ -105,8 +105,9 @@ impl PluginManager {
 
         for name in names {
             if let Err(err) = self.start_plugin(&name).await {
-                log::error!("[plugin:{}] Failed to start: {err}", name);
-                errors.push(err.to_string());
+                let detail = format!("{err:#}");
+                log::error!("[plugin:{}] Failed to start: {detail}", name);
+                errors.push(detail);
             }
         }
 
@@ -200,13 +201,13 @@ impl PluginManager {
                         Ok(())
                     }
                     Err(err) => {
+                        let detail = format!("{err:#}");
                         should_remove = true;
                         plugin.stop().await;
-                        emit_progress(name, "error", Some(err.to_string()));
+                        emit_progress(name, "error", Some(detail.clone()));
                         Err(anyhow::anyhow!(
-                            "plugin '{}' on_load failed. detail: {}",
+                            "plugin '{}' on_load failed. detail: {detail}",
                             name,
-                            err
                         ))
                     }
                 }

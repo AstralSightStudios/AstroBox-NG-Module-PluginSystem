@@ -9,7 +9,7 @@ use pb::xiaomi::protocol::WearPacket;
 use prost::Message;
 use serde_json::json;
 use std::time::Duration;
-use wasmtime::component::{Accessor, FutureReader};
+use wasmtime::component::{Access, FutureReader};
 
 use super::{
     HostString, HostVec, PluginCtx,
@@ -93,110 +93,129 @@ impl psys_host::transport::Host for PluginCtx {
 
 impl psys_host::transport::HostWithStore for PluginCtx {
     fn send<T>(
-        accessor: &Accessor<T, Self>,
+        mut store: Access<'_, T, Self>,
         device_addr: HostString,
         data: HostVec<u8>,
-    ) -> impl core::future::Future<Output = FutureReader<()>> + Send {
-        let app_handle = accessor.with(|mut access| access.get().app_handle());
-        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
-        let permissions = accessor.with(|mut access| access.get().permissions());
-        let future = accessor.with(|mut access| {
-            FutureReader::new(&mut access, crate::api::host::AnyhowFuture(async move {
-                let device_addr = device_addr.to_string();
-                let data = data.as_slice().to_vec();
-                let device_name = resolve_device_name(&device_addr).await;
-                let params = json!({
-                    "plugin": plugin_name,
-                    "addr": device_addr.clone(),
-                    "deviceName": device_name,
-                });
-                if !check_permission_declared(&app_handle, permissions.as_ref(), "request", params)
+    ) -> FutureReader<()> {
+        let app_handle = store.get().app_handle();
+        let plugin_name = store.get().plugin_name().to_string();
+        let permissions = store.get().permissions();
+        let future = {
+            FutureReader::new(
+                &mut store,
+                crate::api::host::AnyhowFuture(async move {
+                    let device_addr = device_addr.to_string();
+                    let data = data.as_slice().to_vec();
+                    let device_name = resolve_device_name(&device_addr).await;
+                    let params = json!({
+                        "plugin": plugin_name,
+                        "addr": device_addr.clone(),
+                        "deviceName": device_name,
+                    });
+                    if !check_permission_declared(
+                        &app_handle,
+                        permissions.as_ref(),
+                        "request",
+                        params,
+                    )
                     .await
-                {
-                    return Ok::<(), Error>(());
-                }
-                if !transport_protocol_supported(&device_addr).await {
-                    log::warn!(
-                        "[pluginsystem] transport.send only supports Xiaomi SARv2 devices for now: {}",
-                        device_addr
-                    );
-                    return Ok::<(), Error>(());
-                }
-                let packet = match decode_pb_packet(&data) {
-                    Ok(packet) => packet,
-                    Err(()) => return Ok::<(), Error>(()),
-                };
-                let _ = send_xiaomi_pb_packet(&device_addr, packet).await;
-                Ok::<(), Error>(())
-            }))
-        });
-        async move { future.expect("failed to create host future reader") }
+                    {
+                        return Ok::<(), Error>(());
+                    }
+                    if !transport_protocol_supported(&device_addr).await {
+                        log::warn!(
+                            "[pluginsystem] transport.send only supports Xiaomi SARv2 devices for now: {}",
+                            device_addr
+                        );
+                        return Ok::<(), Error>(());
+                    }
+                    let packet = match decode_pb_packet(&data) {
+                        Ok(packet) => packet,
+                        Err(()) => return Ok::<(), Error>(()),
+                    };
+                    let _ = send_xiaomi_pb_packet(&device_addr, packet).await;
+                    Ok::<(), Error>(())
+                }),
+            )
+        };
+        future.expect("failed to create host future reader")
     }
 
     fn request<T>(
-        accessor: &Accessor<T, Self>,
+        mut store: Access<'_, T, Self>,
         device_addr: HostString,
         data: HostVec<u8>,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<HostVec<u8>, ()>>> + Send
-    {
-        let app_handle = accessor.with(|mut access| access.get().app_handle());
-        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
-        let permissions = accessor.with(|mut access| access.get().permissions());
-        let future = accessor.with(|mut access| {
-            FutureReader::new(&mut access, crate::api::host::AnyhowFuture(async move {
-                let device_addr = device_addr.to_string();
-                let data = data.as_slice().to_vec();
-                let device_name = resolve_device_name(&device_addr).await;
-                let params = json!({
-                    "plugin": plugin_name,
-                    "addr": device_addr.clone(),
-                    "deviceName": device_name,
-                });
-                if !check_permission_declared(&app_handle, permissions.as_ref(), "request", params)
+    ) -> FutureReader<core::result::Result<HostVec<u8>, ()>> {
+        let app_handle = store.get().app_handle();
+        let plugin_name = store.get().plugin_name().to_string();
+        let permissions = store.get().permissions();
+        let future = {
+            FutureReader::new(
+                &mut store,
+                crate::api::host::AnyhowFuture(async move {
+                    let device_addr = device_addr.to_string();
+                    let data = data.as_slice().to_vec();
+                    let device_name = resolve_device_name(&device_addr).await;
+                    let params = json!({
+                        "plugin": plugin_name,
+                        "addr": device_addr.clone(),
+                        "deviceName": device_name,
+                    });
+                    if !check_permission_declared(
+                        &app_handle,
+                        permissions.as_ref(),
+                        "request",
+                        params,
+                    )
                     .await
-                {
-                    return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(()));
-                }
-                if !transport_protocol_supported(&device_addr).await {
-                    log::warn!(
-                        "[pluginsystem] transport.request only supports Xiaomi SARv2 devices for now: {}",
-                        device_addr
-                    );
-                    return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(()));
-                }
-
-                let packet = match decode_pb_packet(&data) {
-                    Ok(packet) => packet,
-                    Err(()) => return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(())),
-                };
-                let protobuf_type_id = u32::try_from(packet.r#type).ok();
-                let protobuf_packet_id = Some(packet.id);
-                let rx = transport_runtime::register_request_waiter(
-                    device_addr.clone(),
-                    L2Channel::Pb as u32,
-                    protobuf_type_id,
-                    protobuf_packet_id,
-                );
-
-                if send_xiaomi_pb_packet(&device_addr, packet).await.is_err() {
-                    return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(()));
-                }
-
-                let response = match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
-                    Ok(Ok(payload)) => payload,
-                    Ok(Err(_)) => return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(())),
-                    Err(_) => {
+                    {
+                        return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(()));
+                    }
+                    if !transport_protocol_supported(&device_addr).await {
                         log::warn!(
-                            "[pluginsystem] transport.request timed out for {}",
+                            "[pluginsystem] transport.request only supports Xiaomi SARv2 devices for now: {}",
                             device_addr
                         );
                         return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(()));
                     }
-                };
 
-                Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Ok(HostVec::from(response)))
-            }))
-        });
-        async move { future.expect("failed to create host future reader") }
+                    let packet = match decode_pb_packet(&data) {
+                        Ok(packet) => packet,
+                        Err(()) => {
+                            return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(()));
+                        }
+                    };
+                    let protobuf_type_id = u32::try_from(packet.r#type).ok();
+                    let protobuf_packet_id = Some(packet.id);
+                    let rx = transport_runtime::register_request_waiter(
+                        device_addr.clone(),
+                        L2Channel::Pb as u32,
+                        protobuf_type_id,
+                        protobuf_packet_id,
+                    );
+
+                    if send_xiaomi_pb_packet(&device_addr, packet).await.is_err() {
+                        return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(()));
+                    }
+
+                    let response = match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+                        Ok(Ok(payload)) => payload,
+                        Ok(Err(_)) => {
+                            return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(()));
+                        }
+                        Err(_) => {
+                            log::warn!(
+                                "[pluginsystem] transport.request timed out for {}",
+                                device_addr
+                            );
+                            return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(()));
+                        }
+                    };
+
+                    Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Ok(HostVec::from(response)))
+                }),
+            )
+        };
+        future.expect("failed to create host future reader")
     }
 }
