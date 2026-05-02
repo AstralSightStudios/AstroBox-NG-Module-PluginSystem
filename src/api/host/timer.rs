@@ -87,28 +87,31 @@ impl psys_host::timer::HostWithStore for PluginCtx {
         delay_ms: u64,
         payload: HostString,
     ) -> impl core::future::Future<Output = FutureReader<u64>> + Send {
-        let instance = accessor.instance();
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let register_state = accessor.with(|mut access| access.get().register_state());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
-                let timer_id = register_state.next_timer_id();
-                let payload = payload.to_string();
-                let timer_state = register_state.clone();
-                let plugin_name = plugin_name.clone();
-                let handle = tokio::spawn(async move {
-                    tokio::task::yield_now().await;
-                    let delay_ms = delay_ms.max(1);
-                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                    let timer_payload = build_timer_payload(timer_id, TimerKind::Timeout, payload);
-                    dispatch_timer_event(plugin_name, timer_id, timer_payload).await;
-                    timer_state.remove_timer(timer_id);
-                });
-                register_state.insert_timer(timer_id, handle);
-                Ok::<u64, Error>(timer_id)
-            })
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    let timer_id = register_state.next_timer_id();
+                    let payload = payload.to_string();
+                    let timer_state = register_state.clone();
+                    let plugin_name = plugin_name.clone();
+                    let handle = tokio::spawn(async move {
+                        tokio::task::yield_now().await;
+                        let delay_ms = delay_ms.max(1);
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                        let timer_payload =
+                            build_timer_payload(timer_id, TimerKind::Timeout, payload);
+                        dispatch_timer_event(plugin_name, timer_id, timer_payload).await;
+                        timer_state.remove_timer(timer_id);
+                    });
+                    register_state.insert_timer(timer_id, handle);
+                    Ok::<u64, Error>(timer_id)
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn set_interval<T>(
@@ -116,45 +119,50 @@ impl psys_host::timer::HostWithStore for PluginCtx {
         interval_ms: u64,
         payload: HostString,
     ) -> impl core::future::Future<Output = FutureReader<u64>> + Send {
-        let instance = accessor.instance();
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let register_state = accessor.with(|mut access| access.get().register_state());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
-                let timer_id = register_state.next_timer_id();
-                let payload = payload.to_string();
-                let plugin_name = plugin_name.clone();
-                let handle = tokio::spawn(async move {
-                    tokio::task::yield_now().await;
-                    let interval_ms = interval_ms.max(1);
-                    let mut ticker = tokio::time::interval(Duration::from_millis(interval_ms));
-                    ticker.tick().await;
-                    loop {
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    let timer_id = register_state.next_timer_id();
+                    let payload = payload.to_string();
+                    let plugin_name = plugin_name.clone();
+                    let handle = tokio::spawn(async move {
+                        tokio::task::yield_now().await;
+                        let interval_ms = interval_ms.max(1);
+                        let mut ticker = tokio::time::interval(Duration::from_millis(interval_ms));
                         ticker.tick().await;
-                        let timer_payload =
-                            build_timer_payload(timer_id, TimerKind::Interval, payload.clone());
-                        dispatch_timer_event(plugin_name.clone(), timer_id, timer_payload).await;
-                    }
-                });
-                register_state.insert_timer(timer_id, handle);
-                Ok::<u64, Error>(timer_id)
-            })
+                        loop {
+                            ticker.tick().await;
+                            let timer_payload =
+                                build_timer_payload(timer_id, TimerKind::Interval, payload.clone());
+                            dispatch_timer_event(plugin_name.clone(), timer_id, timer_payload)
+                                .await;
+                        }
+                    });
+                    register_state.insert_timer(timer_id, handle);
+                    Ok::<u64, Error>(timer_id)
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn clear_timer<T>(
         accessor: &Accessor<T, Self>,
         timer_id: u64,
     ) -> impl core::future::Future<Output = FutureReader<()>> + Send {
-        let instance = accessor.instance();
         let register_state = accessor.with(|mut access| access.get().register_state());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
-                register_state.clear_timer(timer_id);
-                Ok::<(), Error>(())
-            })
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    register_state.clear_timer(timer_id);
+                    Ok::<(), Error>(())
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 }

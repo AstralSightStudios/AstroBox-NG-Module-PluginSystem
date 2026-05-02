@@ -3,10 +3,7 @@ use crate::transport_runtime;
 use anyhow::Error;
 use corelib::device::xiaomi::{
     XiaomiDevice,
-    packet::{
-        cipher,
-        v2::layer2::L2Channel,
-    },
+    packet::{cipher, v2::layer2::L2Channel},
 };
 use pb::xiaomi::protocol::WearPacket;
 use prost::Message;
@@ -100,12 +97,11 @@ impl psys_host::transport::HostWithStore for PluginCtx {
         device_addr: HostString,
         data: HostVec<u8>,
     ) -> impl core::future::Future<Output = FutureReader<()>> + Send {
-        let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            FutureReader::new(&mut access, crate::api::host::AnyhowFuture(async move {
                 let device_addr = device_addr.to_string();
                 let data = data.as_slice().to_vec();
                 let device_name = resolve_device_name(&device_addr).await;
@@ -132,9 +128,9 @@ impl psys_host::transport::HostWithStore for PluginCtx {
                 };
                 let _ = send_xiaomi_pb_packet(&device_addr, packet).await;
                 Ok::<(), Error>(())
-            })
+            }))
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn request<T>(
@@ -143,12 +139,11 @@ impl psys_host::transport::HostWithStore for PluginCtx {
         data: HostVec<u8>,
     ) -> impl core::future::Future<Output = FutureReader<core::result::Result<HostVec<u8>, ()>>> + Send
     {
-        let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            FutureReader::new(&mut access, crate::api::host::AnyhowFuture(async move {
                 let device_addr = device_addr.to_string();
                 let data = data.as_slice().to_vec();
                 let device_name = resolve_device_name(&device_addr).await;
@@ -200,8 +195,8 @@ impl psys_host::transport::HostWithStore for PluginCtx {
                 };
 
                 Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Ok(HostVec::from(response)))
-            })
+            }))
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 }

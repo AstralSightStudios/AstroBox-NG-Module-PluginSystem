@@ -18,33 +18,33 @@ tokio = { version = "1", features = [
     "time",
 ] }
 futures-util = "0.3"
-zip = "6.0"
+zip = "8.6"
 pollster = "0.4"
 corelib = { path = "../core" }
-os_info = "3.7"
+os_info = "3.14"
 sys-locale = "0.3"
-whoami = "1.5"
-rand = { version = "0.9", features = ["std"] }
+whoami = "2.1"
+rand = { version = "0.10", features = ["std"] }
 chrono = "0.4"
 base64 = "0.22"
 pb = { path = "../pb" }
-prost = "0.14.1"
+prost = "0.14.3"
 
 # Wasmtime
-wasmtime = { version = "38.0.3", features = [
+wasmtime = { version = "44.0.1", features = [
     "async",
     "component-model",
     "component-model-async",
     "pulley",
 ] }
-wasmtime-wasi = "38.0.3"
-sha2 = "0.10"
+wasmtime-wasi = "44.0.1"
+sha2 = "0.11"
 hex = "0.4"
 
 # Wasmtime WASI APIs
-wasmtime-wasi-http = "38.0.3"
-tauri = { version = "2.9.2", features = ["rustls-tls"] }
+wasmtime-wasi-http = "44.0.1"
+tauri = { version = "2.11.0", features = ["rustls-tls"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
-tauri-plugin-opener = "2.5.2"
+tauri-plugin-opener = "2.5.4"
 frontbridge = { path = "../frontbridge" }

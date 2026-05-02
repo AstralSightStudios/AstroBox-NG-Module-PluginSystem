@@ -22,7 +22,7 @@ impl psys_host::os::HostWithStore for PluginCtx {
         accessor: &Accessor<T, Self>,
     ) -> impl core::future::Future<Output = FutureReader<HostString>> + Send {
         make_string_future(accessor, || {
-            whoami::fallible::hostname().unwrap_or_else(|_| "unknown-host".to_string())
+            whoami::hostname().unwrap_or_else(|_| "unknown-host".to_string())
         })
     }
 
@@ -49,48 +49,55 @@ impl psys_host::os::HostWithStore for PluginCtx {
     fn astrobox_language<T>(
         accessor: &Accessor<T, Self>,
     ) -> impl core::future::Future<Output = FutureReader<HostString>> + Send {
-        let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let future = accessor.with(|mut access| {
             let app_handle = app_handle.clone();
-            FutureReader::new(instance, &mut access, async move {
-                let language: String = invoke_frontend(&app_handle, FRONT_LANGUAGE_METHOD, ())
-                    .await
-                    .context("invoke frontend astrobox_language")?;
-                Ok::<HostString, Error>(language.into())
-            })
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    let language: String = invoke_frontend(&app_handle, FRONT_LANGUAGE_METHOD, ())
+                        .await
+                        .context("invoke frontend astrobox_language")?;
+                    Ok::<HostString, Error>(language.into())
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn appearance<T>(
         accessor: &Accessor<T, Self>,
     ) -> impl core::future::Future<Output = FutureReader<HostString>> + Send {
-        let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let future = accessor.with(|mut access| {
             let app_handle = app_handle.clone();
-            FutureReader::new(instance, &mut access, async move {
-                let appearance: String = invoke_frontend(&app_handle, FRONT_APPEARANCE_METHOD, ())
-                    .await
-                    .context("invoke frontend appearance")?;
-                Ok::<HostString, Error>(appearance.into())
-            })
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    let appearance: String =
+                        invoke_frontend(&app_handle, FRONT_APPEARANCE_METHOD, ())
+                            .await
+                            .context("invoke frontend appearance")?;
+                    Ok::<HostString, Error>(appearance.into())
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn timezone_offset_minutes<T>(
         accessor: &Accessor<T, Self>,
     ) -> impl core::future::Future<Output = FutureReader<i32>> + Send {
-        let instance = accessor.instance();
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
-                let offset_seconds = Local::now().offset().local_minus_utc();
-                Ok::<i32, Error>(offset_seconds / 60)
-            })
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    let offset_seconds = Local::now().offset().local_minus_utc();
+                    Ok::<i32, Error>(offset_seconds / 60)
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 }
 
@@ -101,11 +108,13 @@ fn make_string_future<T, F>(
 where
     F: FnOnce() -> String + Send + 'static,
 {
-    let instance = accessor.instance();
     let future = accessor.with(|mut access| {
-        FutureReader::new(instance, &mut access, async move {
-            Ok::<HostString, Error>(producer().into())
-        })
+        FutureReader::new(
+            &mut access,
+            crate::api::host::AnyhowFuture(
+                async move { Ok::<HostString, Error>(producer().into()) },
+            ),
+        )
     });
-    async move { future }
+    async move { future.expect("failed to create host future reader") }
 }

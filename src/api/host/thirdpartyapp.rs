@@ -19,42 +19,44 @@ impl psys_host::thirdpartyapp::HostWithStore for PluginCtx {
         app_info: psys_host::thirdpartyapp::AppInfo,
         page_name: HostString,
     ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
-                let addr = addr.to_string();
-                let page_name = page_name.to_string();
-                let package_name = app_info.package_name.clone().to_string();
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    let addr = addr.to_string();
+                    let page_name = page_name.to_string();
+                    let package_name = app_info.package_name.clone().to_string();
 
-                let params = json!({
-                    "plugin": plugin_name,
-                    "addr": addr.clone(),
-                    "pkgName": package_name,
-                });
-                if !check_permission_declared(
-                    &app_handle,
-                    permissions.as_ref(),
-                    "thirdpartyapp",
-                    params,
-                )
-                .await
-                {
-                    return Ok::<core::result::Result<(), ()>, Error>(Err(()));
-                }
-
-                match launch_qa_impl(addr, app_info, page_name).await {
-                    Ok(()) => Ok::<core::result::Result<(), ()>, Error>(Ok(())),
-                    Err(err) => {
-                        error!("Failed to launch third-party app: {err:?}");
-                        Ok::<core::result::Result<(), ()>, Error>(Err(()))
+                    let params = json!({
+                        "plugin": plugin_name,
+                        "addr": addr.clone(),
+                        "pkgName": package_name,
+                    });
+                    if !check_permission_declared(
+                        &app_handle,
+                        permissions.as_ref(),
+                        "thirdpartyapp",
+                        params,
+                    )
+                    .await
+                    {
+                        return Ok::<core::result::Result<(), ()>, Error>(Err(()));
                     }
-                }
-            })
+
+                    match launch_qa_impl(addr, app_info, page_name).await {
+                        Ok(()) => Ok::<core::result::Result<(), ()>, Error>(Ok(())),
+                        Err(err) => {
+                            error!("Failed to launch third-party app: {err:?}");
+                            Ok::<core::result::Result<(), ()>, Error>(Err(()))
+                        }
+                    }
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn get_thirdparty_app_list<T>(
@@ -63,46 +65,51 @@ impl psys_host::thirdpartyapp::HostWithStore for PluginCtx {
     ) -> impl core::future::Future<
         Output = FutureReader<core::result::Result<HostVec<psys_host::thirdpartyapp::AppInfo>, ()>>,
     > + Send {
-        let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
-                let addr = addr.to_string();
-                let params = json!({
-                    "plugin": plugin_name,
-                    "addr": addr.clone(),
-                });
-                if !check_permission_declared(
-                    &app_handle,
-                    permissions.as_ref(),
-                    "thirdpartyapp",
-                    params,
-                )
-                .await
-                {
-                    return Ok::<
-                        core::result::Result<HostVec<psys_host::thirdpartyapp::AppInfo>, ()>,
-                        Error,
-                    >(Err(()));
-                }
-                match get_thirdparty_app_list_impl(addr).await {
-                    Ok(list) => Ok::<
-                        core::result::Result<HostVec<psys_host::thirdpartyapp::AppInfo>, ()>,
-                        Error,
-                    >(Ok(list)),
-                    Err(err) => {
-                        error!("Failed to fetch third-party app list: {err:?}");
-                        Ok::<
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    let addr = addr.to_string();
+                    let params = json!({
+                        "plugin": plugin_name,
+                        "addr": addr.clone(),
+                    });
+                    if !check_permission_declared(
+                        &app_handle,
+                        permissions.as_ref(),
+                        "thirdpartyapp",
+                        params,
+                    )
+                    .await
+                    {
+                        return Ok::<
                             core::result::Result<HostVec<psys_host::thirdpartyapp::AppInfo>, ()>,
                             Error,
-                        >(Err(()))
+                        >(Err(()));
                     }
-                }
-            })
+                    match get_thirdparty_app_list_impl(addr).await {
+                        Ok(list) => Ok::<
+                            core::result::Result<HostVec<psys_host::thirdpartyapp::AppInfo>, ()>,
+                            Error,
+                        >(Ok(list)),
+                        Err(err) => {
+                            error!("Failed to fetch third-party app list: {err:?}");
+                            Ok::<
+                                core::result::Result<
+                                    HostVec<psys_host::thirdpartyapp::AppInfo>,
+                                    (),
+                                >,
+                                Error,
+                            >(Err(()))
+                        }
+                    }
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 }
 

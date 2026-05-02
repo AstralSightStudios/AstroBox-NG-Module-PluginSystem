@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rand::Rng;
+use rand::RngExt;
 use rand::distr::Alphanumeric;
 use serde::Serialize;
 use tauri::Emitter;

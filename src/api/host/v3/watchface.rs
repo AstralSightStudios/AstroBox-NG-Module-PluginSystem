@@ -18,47 +18,52 @@ impl psys_host::watchface::HostWithStore for PluginCtx {
             core::result::Result<HostVec<psys_host::watchface::WatchfaceInfo>, ()>,
         >,
     > + Send {
-        let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
-                let addr = addr.to_string();
-                let params = json!({
-                    "plugin": plugin_name,
-                    "addr": addr.clone(),
-                });
-                if !check_permission_declared(
-                    &app_handle,
-                    permissions.as_ref(),
-                    "watchface",
-                    params,
-                )
-                .await
-                {
-                    return Ok::<
-                        core::result::Result<HostVec<psys_host::watchface::WatchfaceInfo>, ()>,
-                        Error,
-                    >(Err(()));
-                }
-
-                match get_watchface_list_impl(addr).await {
-                    Ok(list) => Ok::<
-                        core::result::Result<HostVec<psys_host::watchface::WatchfaceInfo>, ()>,
-                        Error,
-                    >(Ok(list)),
-                    Err(err) => {
-                        error!("Failed to fetch watchface list: {err:?}");
-                        Ok::<
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    let addr = addr.to_string();
+                    let params = json!({
+                        "plugin": plugin_name,
+                        "addr": addr.clone(),
+                    });
+                    if !check_permission_declared(
+                        &app_handle,
+                        permissions.as_ref(),
+                        "watchface",
+                        params,
+                    )
+                    .await
+                    {
+                        return Ok::<
                             core::result::Result<HostVec<psys_host::watchface::WatchfaceInfo>, ()>,
                             Error,
-                        >(Err(()))
+                        >(Err(()));
                     }
-                }
-            })
+
+                    match get_watchface_list_impl(addr).await {
+                        Ok(list) => Ok::<
+                            core::result::Result<HostVec<psys_host::watchface::WatchfaceInfo>, ()>,
+                            Error,
+                        >(Ok(list)),
+                        Err(err) => {
+                            error!("Failed to fetch watchface list: {err:?}");
+                            Ok::<
+                                core::result::Result<
+                                    HostVec<psys_host::watchface::WatchfaceInfo>,
+                                    (),
+                                >,
+                                Error,
+                            >(Err(()))
+                        }
+                    }
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn set_current_watchface<T>(
@@ -66,40 +71,42 @@ impl psys_host::watchface::HostWithStore for PluginCtx {
         addr: HostString,
         watchface_id: HostString,
     ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
-                let addr = addr.to_string();
-                let watchface_id = watchface_id.to_string();
-                let params = json!({
-                    "plugin": plugin_name,
-                    "addr": addr.clone(),
-                    "watchfaceId": watchface_id.clone(),
-                });
-                if !check_permission_declared(
-                    &app_handle,
-                    permissions.as_ref(),
-                    "watchface",
-                    params,
-                )
-                .await
-                {
-                    return Ok::<core::result::Result<(), ()>, Error>(Err(()));
-                }
-
-                match set_current_watchface_impl(addr, watchface_id).await {
-                    Ok(()) => Ok::<core::result::Result<(), ()>, Error>(Ok(())),
-                    Err(err) => {
-                        error!("Failed to set current watchface: {err:?}");
-                        Ok::<core::result::Result<(), ()>, Error>(Err(()))
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    let addr = addr.to_string();
+                    let watchface_id = watchface_id.to_string();
+                    let params = json!({
+                        "plugin": plugin_name,
+                        "addr": addr.clone(),
+                        "watchfaceId": watchface_id.clone(),
+                    });
+                    if !check_permission_declared(
+                        &app_handle,
+                        permissions.as_ref(),
+                        "watchface",
+                        params,
+                    )
+                    .await
+                    {
+                        return Ok::<core::result::Result<(), ()>, Error>(Err(()));
                     }
-                }
-            })
+
+                    match set_current_watchface_impl(addr, watchface_id).await {
+                        Ok(()) => Ok::<core::result::Result<(), ()>, Error>(Ok(())),
+                        Err(err) => {
+                            error!("Failed to set current watchface: {err:?}");
+                            Ok::<core::result::Result<(), ()>, Error>(Err(()))
+                        }
+                    }
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 }
 

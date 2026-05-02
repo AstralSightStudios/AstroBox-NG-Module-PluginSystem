@@ -47,13 +47,12 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
         info: psys_host::dialog::DialogInfo,
     ) -> impl core::future::Future<Output = FutureReader<psys_host::dialog::DialogResult>> + Send
     {
-        let instance = accessor.instance();
         let future = accessor.with(|mut access| {
             let app_handle = {
                 let ctx = access.get();
                 ctx.app_handle()
             };
-            FutureReader::new(instance, &mut access, async move {
+            FutureReader::new(&mut access, crate::api::host::AnyhowFuture(async move {
                 match (dialog_type, style) {
                     (
                         psys_host::dialog::DialogType::Alert,
@@ -71,9 +70,9 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                         Ok(default_dialog_result())
                     }
                 }
-            })
+            }))
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn pick_file<T>(
@@ -82,7 +81,6 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
         filter: psys_host::dialog::FilterConfig,
     ) -> impl core::future::Future<Output = FutureReader<psys_host::dialog::PickResult>> + Send
     {
-        let instance = accessor.instance();
         let future = accessor.with(|mut access| {
             let app_handle = {
                 let ctx = access.get();
@@ -92,11 +90,14 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                 let ctx = access.get();
                 ctx.plugin_root().clone()
             };
-            FutureReader::new(instance, &mut access, async move {
-                pick_file_with_dialog(app_handle, plugin_root, config, filter).await
-            })
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    pick_file_with_dialog(app_handle, plugin_root, config, filter).await
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn save_file_start<T>(
@@ -105,7 +106,6 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
     ) -> impl core::future::Future<
         Output = FutureReader<core::result::Result<psys_host::dialog::SaveSession, ()>>,
     > + Send {
-        let instance = accessor.instance();
         let future = accessor.with(|mut access| {
             let app_handle = {
                 let ctx = access.get();
@@ -115,12 +115,15 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                 let ctx = access.get();
                 ctx.plugin_name().to_string()
             };
-            FutureReader::new(instance, &mut access, async move {
-                let result = save_file_start_with_dialog(app_handle, plugin_name, filter).await;
-                Ok::<core::result::Result<psys_host::dialog::SaveSession, ()>, Error>(result)
-            })
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    let result = save_file_start_with_dialog(app_handle, plugin_name, filter).await;
+                    Ok::<core::result::Result<psys_host::dialog::SaveSession, ()>, Error>(result)
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn save_file_write_chunk<T>(
@@ -128,13 +131,12 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
         session_id: u64,
         data: HostVec<u8>,
     ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
         let future = accessor.with(|mut access| {
             let plugin_name = {
                 let ctx = access.get();
                 ctx.plugin_name().to_string()
             };
-            FutureReader::new(instance, &mut access, async move {
+            FutureReader::new(&mut access, crate::api::host::AnyhowFuture(async move {
                 let key = (plugin_name.clone(), session_id);
                 let write_result = {
                     let mut sessions = SAVE_FILE_SESSIONS
@@ -161,22 +163,21 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                     return Ok::<core::result::Result<(), ()>, Error>(Err(()));
                 }
                 Ok::<core::result::Result<(), ()>, Error>(Ok(()))
-            })
+            }))
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn save_file_finish<T>(
         accessor: &Accessor<T, Self>,
         session_id: u64,
     ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
         let future = accessor.with(|mut access| {
             let plugin_name = {
                 let ctx = access.get();
                 ctx.plugin_name().to_string()
             };
-            FutureReader::new(instance, &mut access, async move {
+            FutureReader::new(&mut access, crate::api::host::AnyhowFuture(async move {
                 let key = (plugin_name.clone(), session_id);
                 let mut session = {
                     let mut sessions = SAVE_FILE_SESSIONS
@@ -204,40 +205,42 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                 }
 
                 Ok::<core::result::Result<(), ()>, Error>(Ok(()))
-            })
+            }))
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn save_file_abort<T>(
         accessor: &Accessor<T, Self>,
         session_id: u64,
     ) -> impl core::future::Future<Output = FutureReader<()>> + Send {
-        let instance = accessor.instance();
         let future = accessor.with(|mut access| {
             let plugin_name = {
                 let ctx = access.get();
                 ctx.plugin_name().to_string()
             };
-            FutureReader::new(instance, &mut access, async move {
-                let key = (plugin_name.clone(), session_id);
-                let removed = {
-                    let mut sessions = SAVE_FILE_SESSIONS
-                        .lock()
-                        .unwrap_or_else(|poison| poison.into_inner());
-                    sessions.remove(&key).is_some()
-                };
-                if !removed {
-                    log::warn!(
-                        "dialog::save_file_abort session not found: plugin={} session_id={}",
-                        plugin_name,
-                        session_id
-                    );
-                }
-                Ok::<(), Error>(())
-            })
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    let key = (plugin_name.clone(), session_id);
+                    let removed = {
+                        let mut sessions = SAVE_FILE_SESSIONS
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner());
+                        sessions.remove(&key).is_some()
+                    };
+                    if !removed {
+                        log::warn!(
+                            "dialog::save_file_abort session not found: plugin={} session_id={}",
+                            plugin_name,
+                            session_id
+                        );
+                    }
+                    Ok::<(), Error>(())
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 }
 

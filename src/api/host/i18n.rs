@@ -26,45 +26,47 @@ impl psys_host::i18n::HostWithStore for PluginCtx {
         accessor: &Accessor<T, Self>,
         content: HostString,
     ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
-                let payload = LoadI18nJsonPayload {
-                    content: content.to_string(),
-                };
+            FutureReader::new(
+                &mut access,
+                crate::api::host::AnyhowFuture(async move {
+                    let payload = LoadI18nJsonPayload {
+                        content: content.to_string(),
+                    };
 
-                let response = invoke_frontend::<LoadI18nJsonAck, _>(
-                    &app_handle,
-                    FRONT_I18N_LOAD_JSON_METHOD,
-                    payload,
-                )
-                .await;
+                    let response = invoke_frontend::<LoadI18nJsonAck, _>(
+                        &app_handle,
+                        FRONT_I18N_LOAD_JSON_METHOD,
+                        payload,
+                    )
+                    .await;
 
-                match response {
-                    Ok(ack) if ack.success => {
-                        log::info!("[plugin:{}] i18n.load-json loaded", plugin_name);
-                        Ok::<core::result::Result<(), ()>, Error>(Ok(()))
+                    match response {
+                        Ok(ack) if ack.success => {
+                            log::info!("[plugin:{}] i18n.load-json loaded", plugin_name);
+                            Ok::<core::result::Result<(), ()>, Error>(Ok(()))
+                        }
+                        Ok(_) => {
+                            log::warn!(
+                                "[plugin:{}] i18n.load-json rejected by frontend",
+                                plugin_name
+                            );
+                            Ok::<core::result::Result<(), ()>, Error>(Err(()))
+                        }
+                        Err(err) => {
+                            log::warn!(
+                                "[plugin:{}] i18n.load-json invoke frontend failed: {}",
+                                plugin_name,
+                                err
+                            );
+                            Ok::<core::result::Result<(), ()>, Error>(Err(()))
+                        }
                     }
-                    Ok(_) => {
-                        log::warn!(
-                            "[plugin:{}] i18n.load-json rejected by frontend",
-                            plugin_name
-                        );
-                        Ok::<core::result::Result<(), ()>, Error>(Err(()))
-                    }
-                    Err(err) => {
-                        log::warn!(
-                            "[plugin:{}] i18n.load-json invoke frontend failed: {}",
-                            plugin_name,
-                            err
-                        );
-                        Ok::<core::result::Result<(), ()>, Error>(Err(()))
-                    }
-                }
-            })
+                }),
+            )
         });
-        async move { future }
+        async move { future.expect("failed to create host future reader") }
     }
 }
