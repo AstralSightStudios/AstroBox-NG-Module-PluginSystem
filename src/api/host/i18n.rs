@@ -1,7 +1,7 @@
 use anyhow::Error;
 use frontbridge::invoke_frontend;
 use serde::{Deserialize, Serialize};
-use wasmtime::component::{Access, FutureReader};
+use wasmtime::component::{Accessor, FutureReader};
 
 use crate::bindings::astrobox::psys_host;
 
@@ -23,14 +23,14 @@ impl psys_host::i18n::Host for PluginCtx {}
 
 impl psys_host::i18n::HostWithStore for PluginCtx {
     fn load_json<T>(
-        mut store: Access<'_, T, Self>,
+        accessor: &Accessor<T, Self>,
         content: HostString,
-    ) -> FutureReader<core::result::Result<(), ()>> {
-        let app_handle = store.get().app_handle();
-        let plugin_name = store.get().plugin_name().to_string();
-        let future = {
+    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
+        let app_handle = accessor.with(|mut access| access.get().app_handle());
+        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let future = accessor.with(|mut access| {
             FutureReader::new(
-                &mut store,
+                &mut access,
                 crate::api::host::AnyhowFuture(async move {
                     let payload = LoadI18nJsonPayload {
                         content: content.to_string(),
@@ -66,7 +66,7 @@ impl psys_host::i18n::HostWithStore for PluginCtx {
                     }
                 }),
             )
-        };
-        future.expect("failed to create host future reader")
+        });
+        async move { future.expect("failed to create host future reader") }
     }
 }

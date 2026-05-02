@@ -5,7 +5,7 @@ use frontbridge::invoke_frontend;
 use serde::Deserialize;
 use serde_json::json;
 use tauri::Manager;
-use wasmtime::component::{Access, FutureReader};
+use wasmtime::component::{Accessor, FutureReader};
 
 use super::{HostString, HostVec, PluginCtx, permission::check_permission_declared};
 
@@ -32,15 +32,16 @@ impl psys_host::device::Host for PluginCtx {}
 
 impl psys_host::device::HostWithStore for PluginCtx {
     fn get_device_list<T>(
-        mut store: Access<'_, T, Self>,
-    ) -> FutureReader<HostVec<psys_host::device::DeviceInfo>> {
-        let app_handle = store.get().app_handle();
-        let plugin_name = store.get().plugin_name().to_string();
-        let permissions = store.get().permissions();
-        let future = {
+        accessor: &Accessor<T, Self>,
+    ) -> impl core::future::Future<Output = FutureReader<HostVec<psys_host::device::DeviceInfo>>> + Send
+    {
+        let app_handle = accessor.with(|mut access| access.get().app_handle());
+        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let permissions = accessor.with(|mut access| access.get().permissions());
+        let future = accessor.with(|mut access| {
             let app_handle = app_handle.clone();
             FutureReader::new(
-                &mut store,
+                &mut access,
                 crate::api::host::AnyhowFuture(async move {
                     log::info!("[plugin:{}] device list request (history)", plugin_name);
                     if !check_permission_declared(
@@ -73,19 +74,20 @@ impl psys_host::device::HostWithStore for PluginCtx {
                     Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(ret)
                 }),
             )
-        };
-        future.expect("failed to create host future reader")
+        });
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn get_connected_device_list<T>(
-        mut store: Access<'_, T, Self>,
-    ) -> FutureReader<HostVec<psys_host::device::DeviceInfo>> {
-        let app_handle = store.get().app_handle();
-        let plugin_name = store.get().plugin_name().to_string();
-        let permissions = store.get().permissions();
-        let future = {
+        accessor: &Accessor<T, Self>,
+    ) -> impl core::future::Future<Output = FutureReader<HostVec<psys_host::device::DeviceInfo>>> + Send
+    {
+        let app_handle = accessor.with(|mut access| access.get().app_handle());
+        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let permissions = accessor.with(|mut access| access.get().permissions());
+        let future = accessor.with(|mut access| {
             FutureReader::new(
-                &mut store,
+                &mut access,
                 crate::api::host::AnyhowFuture(async move {
                     log::info!("[plugin:{}] connected device list request", plugin_name);
                     if !check_permission_declared(
@@ -119,20 +121,20 @@ impl psys_host::device::HostWithStore for PluginCtx {
                     Ok::<HostVec<psys_host::device::DeviceInfo>, Error>(ret)
                 }),
             )
-        };
-        future.expect("failed to create host future reader")
+        });
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn disconnect_device<T>(
-        mut store: Access<'_, T, Self>,
+        accessor: &Accessor<T, Self>,
         device_addr: HostString,
-    ) -> FutureReader<core::result::Result<(), ()>> {
-        let app_handle = store.get().app_handle();
-        let plugin_name = store.get().plugin_name().to_string();
-        let permissions = store.get().permissions();
-        let future = {
+    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
+        let app_handle = accessor.with(|mut access| access.get().app_handle());
+        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let permissions = accessor.with(|mut access| access.get().permissions());
+        let future = accessor.with(|mut access| {
             FutureReader::new(
-                &mut store,
+                &mut access,
                 crate::api::host::AnyhowFuture(async move {
                     let addr = device_addr.to_string();
 
@@ -173,7 +175,7 @@ impl psys_host::device::HostWithStore for PluginCtx {
                     Ok::<core::result::Result<(), ()>, Error>(Ok(()))
                 }),
             )
-        };
-        future.expect("failed to create host future reader")
+        });
+        async move { future.expect("failed to create host future reader") }
     }
 }

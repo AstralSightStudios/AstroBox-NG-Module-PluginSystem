@@ -1,5 +1,5 @@
 use anyhow::Error;
-use corelib::device::xiaomi::XiaomiDevice;
+use corelib::device::xiaomi::{XiaomiDevice, components::resource::ResourceComponent};
 use frontbridge::invoke_frontend;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -34,7 +34,7 @@ async fn request_permission(
 }
 
 fn normalize_permission_name(name: &str) -> String {
-    name.trim().to_ascii_lowercase().replace('-', "_")
+    name.trim().to_ascii_lowercase()
 }
 
 fn extract_plugin_name(params: &Value) -> Option<String> {
@@ -61,9 +61,7 @@ pub(crate) fn is_permission_declared(permissions: &[String], required: &str) -> 
     if required.is_empty() {
         return false;
     }
-    permissions
-        .iter()
-        .any(|perm| normalize_permission_name(perm) == required)
+    permissions.iter().any(|perm| perm == &required)
 }
 
 pub(crate) async fn check_permission(
@@ -139,6 +137,33 @@ pub(crate) async fn resolve_device_name(addr: &str) -> Option<String> {
     corelib::ecs::with_rt_mut(move |rt| {
         rt.component_ref::<XiaomiDevice>(addr.as_str())
             .map(|device| device.name().to_string())
+    })
+    .await
+}
+
+pub(crate) async fn resolve_quick_app_name(device_addr: &str, pkg_name: &str) -> Option<String> {
+    let device_addr = device_addr.trim();
+    let pkg_name = pkg_name.trim();
+    if device_addr.is_empty() || pkg_name.is_empty() {
+        return None;
+    }
+    let device_addr = device_addr.to_string();
+    let pkg_name = pkg_name.to_string();
+    corelib::ecs::with_rt_mut(move |rt| {
+        let entity = rt.device_entity(&device_addr)?;
+        let resource_comp = rt.world().get::<ResourceComponent>(entity)?;
+        resource_comp
+            .quick_apps
+            .iter()
+            .find(|item| item.package_name == pkg_name)
+            .and_then(|item| {
+                let name = item.app_name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(name.to_string())
+                }
+            })
     })
     .await
 }

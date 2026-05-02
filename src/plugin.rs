@@ -76,17 +76,13 @@ pub struct CardRegistration {
 
 #[derive(Default)]
 pub struct PluginRegisterState {
-    transport_recv: StdMutex<Vec<TransportRecvRegistration>>,
-    interconnect_recv: StdMutex<Vec<InterconnectRecvRegistration>>,
-    providers: StdMutex<Vec<ProviderRegistration>>,
-    cards: StdMutex<Vec<CardRegistration>>,
-    deeplink_registered: StdMutex<bool>,
+    transport_recv: Mutex<Vec<TransportRecvRegistration>>,
+    interconnect_recv: Mutex<Vec<InterconnectRecvRegistration>>,
+    providers: Mutex<Vec<ProviderRegistration>>,
+    cards: Mutex<Vec<CardRegistration>>,
+    deeplink_registered: Mutex<bool>,
     timers: StdMutex<HashMap<u64, JoinHandle<()>>>,
     next_timer_id: AtomicU64,
-}
-
-fn lock_std_mutex<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
 impl PluginRegisterState {
@@ -94,8 +90,8 @@ impl PluginRegisterState {
         Self::default()
     }
 
-    pub fn register_transport_recv_sync(&self, registration: TransportRecvRegistration) {
-        let mut guard = lock_std_mutex(&self.transport_recv);
+    pub async fn register_transport_recv(&self, registration: TransportRecvRegistration) {
+        let mut guard = self.transport_recv.lock().await;
         if !guard.iter().any(|existing| {
             existing.addr == registration.addr
                 && existing.filter.xiaomi_vela_v5_channel_id
@@ -107,12 +103,8 @@ impl PluginRegisterState {
         }
     }
 
-    pub async fn register_transport_recv(&self, registration: TransportRecvRegistration) {
-        self.register_transport_recv_sync(registration);
-    }
-
-    pub fn register_interconnect_recv_sync(&self, registration: InterconnectRecvRegistration) {
-        let mut guard = lock_std_mutex(&self.interconnect_recv);
+    pub async fn register_interconnect_recv(&self, registration: InterconnectRecvRegistration) {
+        let mut guard = self.interconnect_recv.lock().await;
         if !guard.iter().any(|existing| {
             existing.addr == registration.addr && existing.pkg_name == registration.pkg_name
         }) {
@@ -120,58 +112,30 @@ impl PluginRegisterState {
         }
     }
 
-    pub async fn register_interconnect_recv(&self, registration: InterconnectRecvRegistration) {
-        self.register_interconnect_recv_sync(registration);
-    }
-
-    pub fn register_provider_sync(&self, registration: ProviderRegistration) {
-        let mut guard = lock_std_mutex(&self.providers);
+    pub async fn register_provider(&self, registration: ProviderRegistration) {
+        let mut guard = self.providers.lock().await;
         guard.retain(|existing| existing.name != registration.name);
         guard.push(registration);
     }
 
-    pub async fn register_provider(&self, registration: ProviderRegistration) {
-        self.register_provider_sync(registration);
-    }
-
-    pub fn register_card_sync(&self, registration: CardRegistration) {
-        let mut guard = lock_std_mutex(&self.cards);
+    pub async fn register_card(&self, registration: CardRegistration) {
+        let mut guard = self.cards.lock().await;
         guard.retain(|existing| {
             existing.id != registration.id || existing.card_type != registration.card_type
         });
         guard.push(registration);
     }
 
-    pub async fn register_card(&self, registration: CardRegistration) {
-        self.register_card_sync(registration);
-    }
-
-    pub fn list_transport_recv_sync(&self) -> Vec<TransportRecvRegistration> {
-        lock_std_mutex(&self.transport_recv).clone()
-    }
-
-    pub fn list_interconnect_recv_sync(&self) -> Vec<InterconnectRecvRegistration> {
-        lock_std_mutex(&self.interconnect_recv).clone()
-    }
-
-    pub fn list_cards_sync(&self) -> Vec<CardRegistration> {
-        lock_std_mutex(&self.cards).clone()
-    }
-
     pub async fn list_cards(&self) -> Vec<CardRegistration> {
-        self.list_cards_sync()
-    }
-
-    pub fn list_providers_sync(&self) -> Vec<ProviderRegistration> {
-        lock_std_mutex(&self.providers).clone()
+        self.cards.lock().await.clone()
     }
 
     pub async fn list_providers(&self) -> Vec<ProviderRegistration> {
-        self.list_providers_sync()
+        self.providers.lock().await.clone()
     }
 
-    pub fn try_register_deeplink_sync(&self) -> bool {
-        let mut guard = lock_std_mutex(&self.deeplink_registered);
+    pub async fn try_register_deeplink(&self) -> bool {
+        let mut guard = self.deeplink_registered.lock().await;
         if *guard {
             false
         } else {
@@ -180,16 +144,8 @@ impl PluginRegisterState {
         }
     }
 
-    pub async fn try_register_deeplink(&self) -> bool {
-        self.try_register_deeplink_sync()
-    }
-
-    pub fn is_deeplink_registered_sync(&self) -> bool {
-        *lock_std_mutex(&self.deeplink_registered)
-    }
-
     pub async fn is_deeplink_registered(&self) -> bool {
-        self.is_deeplink_registered_sync()
+        *self.deeplink_registered.lock().await
     }
 
     pub fn next_timer_id(&self) -> u64 {
@@ -197,12 +153,18 @@ impl PluginRegisterState {
     }
 
     pub fn insert_timer(&self, id: u64, handle: JoinHandle<()>) {
-        let mut guard = lock_std_mutex(&self.timers);
+        let mut guard = self
+            .timers
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         guard.insert(id, handle);
     }
 
     pub fn remove_timer(&self, id: u64) -> Option<JoinHandle<()>> {
-        let mut guard = lock_std_mutex(&self.timers);
+        let mut guard = self
+            .timers
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         guard.remove(&id)
     }
 
@@ -216,23 +178,22 @@ impl PluginRegisterState {
     }
 
     pub fn clear_all_timers(&self) {
-        let mut guard = lock_std_mutex(&self.timers);
+        let mut guard = self
+            .timers
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         for (_, handle) in guard.drain() {
             handle.abort();
         }
     }
 
-    pub fn reset_runtime_state_sync(&self) {
-        lock_std_mutex(&self.transport_recv).clear();
-        lock_std_mutex(&self.interconnect_recv).clear();
-        lock_std_mutex(&self.providers).clear();
-        lock_std_mutex(&self.cards).clear();
-        *lock_std_mutex(&self.deeplink_registered) = false;
-        self.clear_all_timers();
-    }
-
     pub async fn reset_runtime_state(&self) {
-        self.reset_runtime_state_sync();
+        self.transport_recv.lock().await.clear();
+        self.interconnect_recv.lock().await.clear();
+        self.providers.lock().await.clear();
+        self.cards.lock().await.clear();
+        *self.deeplink_registered.lock().await = false;
+        self.clear_all_timers();
     }
 }
 
@@ -593,10 +554,7 @@ fn create_engine() -> Result<Engine> {
     config
         .wasm_memory64(false)
         .wasm_component_model(true)
-        .wasm_component_model_async(true)
-        // Old wit-bindgen plugins block on host futures during sync callbacks.
-        .wasm_component_model_async_builtins(true)
-        .concurrency_support(true);
+        .wasm_component_model_async(true);
 
     Engine::new(&config)
         .map_err(|err| anyhow::Error::from(err.context("Failed to initialize the Wasmtime engine")))
@@ -681,7 +639,7 @@ impl<D> FutureConsumer<D> for DrainUnitFuture {
 impl PluginRuntime {
     fn normalize_permissions(raw: &[String]) -> Vec<String> {
         raw.iter()
-            .map(|permission| permission.trim().to_ascii_lowercase().replace('-', "_"))
+            .map(|permission| permission.trim().to_ascii_lowercase())
             .filter(|permission| !permission.is_empty())
             .collect()
     }
@@ -820,15 +778,9 @@ impl PluginRuntime {
             log::info!("[plugin:{}] Calling on_load...", self.name.clone());
             self.emit_progress("on_load", None);
             let lifecycle = instance.astrobox_psys_plugin_lifecycle();
-            store
-                .run_concurrent(async |accessor| lifecycle.call_on_load(accessor).await)
-                .await
-                .and_then(|result| result)
-                .map_err(|err| {
-                    anyhow::Error::from(
-                        err.context("Failed to execute the plugin on-load callback"),
-                    )
-                })?;
+            lifecycle.call_on_load(&mut store).await.map_err(|err| {
+                anyhow::Error::from(err.context("Failed to execute the plugin on-load callback"))
+            })?;
 
             let mut guard = self.instance.lock().await;
             *guard = Some(PluginInstance::V3 {
@@ -850,13 +802,9 @@ impl PluginRuntime {
         log::info!("[plugin:{}] Calling on_load...", self.name.clone());
         self.emit_progress("on_load", None);
         let lifecycle = instance.astrobox_psys_plugin_lifecycle();
-        store
-            .run_concurrent(async |accessor| lifecycle.call_on_load(accessor).await)
-            .await
-            .and_then(|result| result)
-            .map_err(|err| {
-                anyhow::Error::from(err.context("Failed to execute the plugin on-load callback"))
-            })?;
+        lifecycle.call_on_load(&mut store).await.map_err(|err| {
+            anyhow::Error::from(err.context("Failed to execute the plugin on-load callback"))
+        })?;
 
         let mut guard = self.instance.lock().await;
         *guard = Some(PluginInstance::V2 {
@@ -951,57 +899,52 @@ impl PluginRuntime {
         match instance {
             PluginInstance::V2 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event();
-                let future = store
-                    .run_concurrent(async |accessor| {
-                        event_iface
-                            .call_on_event(accessor, event_type, payload.clone())
-                            .await
-                    })
+                let future = event_iface
+                    .call_on_event(&mut *store, event_type, payload.as_str())
                     .await
-                    .and_then(|result| result)
                     .map_err(|e| {
                         anyhow::anyhow!(
                             "Failed to start the plugin on-event callback. detail: {}",
-                            e
+                            e.to_string()
                         )
                     })?;
                 let _ = future.pipe(&mut *store, DrainStringFuture);
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
-                let event_type_v3 = match event_type {
-                    psys_plugin::event::EventType::PluginMessage => {
-                        psys_plugin_v3::EventType::PluginMessage
-                    }
-                    psys_plugin::event::EventType::InterconnectMessage => {
-                        psys_plugin_v3::EventType::InterconnectMessage
-                    }
-                    psys_plugin::event::EventType::DeviceAction => {
-                        psys_plugin_v3::EventType::DeviceAction
-                    }
-                    psys_plugin::event::EventType::ProviderAction => {
-                        psys_plugin_v3::EventType::ProviderAction
-                    }
-                    psys_plugin::event::EventType::DeeplinkAction => {
-                        psys_plugin_v3::EventType::DeeplinkAction
-                    }
-                    psys_plugin::event::EventType::TransportPacket => {
-                        psys_plugin_v3::EventType::TransportPacket
-                    }
-                    psys_plugin::event::EventType::Timer => psys_plugin_v3::EventType::Timer,
-                };
-                let future = store
-                    .run_concurrent(async |accessor| {
-                        event_iface
-                            .call_on_event(accessor, event_type_v3, payload.clone())
-                            .await
-                    })
+                let future = event_iface
+                    .call_on_event(
+                        &mut *store,
+                        match event_type {
+                            psys_plugin::event::EventType::PluginMessage => {
+                                psys_plugin_v3::EventType::PluginMessage
+                            }
+                            psys_plugin::event::EventType::InterconnectMessage => {
+                                psys_plugin_v3::EventType::InterconnectMessage
+                            }
+                            psys_plugin::event::EventType::DeviceAction => {
+                                psys_plugin_v3::EventType::DeviceAction
+                            }
+                            psys_plugin::event::EventType::ProviderAction => {
+                                psys_plugin_v3::EventType::ProviderAction
+                            }
+                            psys_plugin::event::EventType::DeeplinkAction => {
+                                psys_plugin_v3::EventType::DeeplinkAction
+                            }
+                            psys_plugin::event::EventType::TransportPacket => {
+                                psys_plugin_v3::EventType::TransportPacket
+                            }
+                            psys_plugin::event::EventType::Timer => {
+                                psys_plugin_v3::EventType::Timer
+                            }
+                        },
+                        payload.as_str(),
+                    )
                     .await
-                    .and_then(|result| result)
                     .map_err(|e| {
                         anyhow::anyhow!(
                             "Failed to start the plugin on-event-v3 callback. detail: {}",
-                            e
+                            e.to_string()
                         )
                     })?;
                 let _ = future.pipe(&mut *store, DrainStringFuture);
@@ -1019,36 +962,26 @@ impl PluginRuntime {
         match instance {
             PluginInstance::V2 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event();
-                let future = store
-                    .run_concurrent(async |accessor| {
-                        event_iface
-                            .call_on_ui_render(accessor, element_id.clone())
-                            .await
-                    })
+                let future = event_iface
+                    .call_on_ui_render(&mut *store, element_id.as_str())
                     .await
-                    .and_then(|result| result)
                     .map_err(|e| {
                         anyhow::anyhow!(
                             "Failed to start the plugin on-ui-render callback. detail: {}",
-                            e
+                            e.to_string()
                         )
                     })?;
                 let _ = future.pipe(&mut *store, DrainUnitFuture);
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
-                let future = store
-                    .run_concurrent(async |accessor| {
-                        event_iface
-                            .call_on_ui_render(accessor, element_id.clone())
-                            .await
-                    })
+                let future = event_iface
+                    .call_on_ui_render(&mut *store, element_id.as_str())
                     .await
-                    .and_then(|result| result)
                     .map_err(|e| {
                         anyhow::anyhow!(
                             "Failed to start the plugin on-ui-render-v3 callback. detail: {}",
-                            e
+                            e.to_string()
                         )
                     })?;
                 let _ = future.pipe(&mut *store, DrainUnitFuture);
@@ -1066,36 +999,26 @@ impl PluginRuntime {
         match instance {
             PluginInstance::V2 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event();
-                let future = store
-                    .run_concurrent(async |accessor| {
-                        event_iface
-                            .call_on_card_render(accessor, element_id.clone())
-                            .await
-                    })
+                let future = event_iface
+                    .call_on_card_render(&mut *store, element_id.as_str())
                     .await
-                    .and_then(|result| result)
                     .map_err(|e| {
                         anyhow::anyhow!(
                             "Failed to start the plugin on-card-render callback. detail: {}",
-                            e
+                            e.to_string()
                         )
                     })?;
                 let _ = future.pipe(&mut *store, DrainUnitFuture);
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
-                let future = store
-                    .run_concurrent(async |accessor| {
-                        event_iface
-                            .call_on_card_render(accessor, element_id.clone())
-                            .await
-                    })
+                let future = event_iface
+                    .call_on_card_render(&mut *store, element_id.as_str())
                     .await
-                    .and_then(|result| result)
                     .map_err(|e| {
                         anyhow::anyhow!(
                             "Failed to start the plugin on-card-render-v3 callback. detail: {}",
-                            e
+                            e.to_string()
                         )
                     })?;
                 let _ = future.pipe(&mut *store, DrainUnitFuture);
@@ -1122,18 +1045,13 @@ impl PluginRuntime {
             ));
         };
         let event_iface = world.astrobox_psys_plugin_event();
-        let future = store
-            .run_concurrent(async |accessor| {
-                event_iface
-                    .call_on_ui_event(accessor, event_id.clone(), event, payload.clone())
-                    .await
-            })
+        let future = event_iface
+            .call_on_ui_event(&mut *store, event_id.as_str(), event, payload.as_str())
             .await
-            .and_then(|result| result)
             .map_err(|e| {
                 anyhow::anyhow!(
                     "Failed to start the plugin on-ui-event callback. detail: {}",
-                    e
+                    e.to_string()
                 )
             })?;
         let _ = future.pipe(&mut *store, DrainStringFuture);
@@ -1158,18 +1076,13 @@ impl PluginRuntime {
             ));
         };
         let event_iface = world.astrobox_psys_plugin_event_v3();
-        let future = store
-            .run_concurrent(async |accessor| {
-                event_iface
-                    .call_on_ui_event_v3(accessor, event_id.clone(), event, payload.clone())
-                    .await
-            })
+        let future = event_iface
+            .call_on_ui_event_v3(&mut *store, event_id.as_str(), event, payload.as_str())
             .await
-            .and_then(|result| result)
             .map_err(|e| {
                 anyhow::anyhow!(
                     "Failed to start the plugin on-ui-event-v3 callback. detail: {}",
-                    e
+                    e.to_string()
                 )
             })?;
         let _ = future.pipe(&mut *store, DrainStringFuture);
@@ -1227,7 +1140,7 @@ impl PluginRuntime {
     }
 
     pub async fn matches_interconnect(&self, addr: &str, pkg_name: &str) -> bool {
-        let registrations = self.register_state.list_interconnect_recv_sync();
+        let registrations = self.register_state.interconnect_recv.lock().await;
         registrations
             .iter()
             .any(|reg| reg.addr == addr && reg.pkg_name == pkg_name)
@@ -1239,7 +1152,7 @@ impl PluginRuntime {
         channel_id: u32,
         protobuf_type_id: Option<u32>,
     ) -> bool {
-        let registrations = self.register_state.list_transport_recv_sync();
+        let registrations = self.register_state.transport_recv.lock().await;
         registrations.iter().any(|reg| {
             if reg.addr != addr {
                 return false;

@@ -42,46 +42,6 @@ where
     }
 }
 
-pub(crate) struct ReadyFuture<T> {
-    value: Option<anyhow::Result<T>>,
-}
-
-impl<T> ReadyFuture<T> {
-    pub(crate) fn ok(value: T) -> Self {
-        Self {
-            value: Some(Ok(value)),
-        }
-    }
-}
-
-impl<T> Unpin for ReadyFuture<T> {}
-
-impl<D, T> FutureProducer<D> for ReadyFuture<T>
-where
-    T: Send + 'static,
-{
-    type Item = T;
-
-    fn poll_produce(
-        self: Pin<&mut Self>,
-        _: &mut TaskContext<'_>,
-        _: StoreContextMut<D>,
-        finish: bool,
-    ) -> Poll<wasmtime::Result<Option<Self::Item>>> {
-        let this = self.get_mut();
-        if finish {
-            let _ = this.value.take();
-            return Poll::Ready(Ok(None));
-        }
-
-        match this.value.take() {
-            Some(Ok(value)) => Poll::Ready(Ok(Some(value))),
-            Some(Err(err)) => Poll::Ready(Err(wasmtime::Error::from_anyhow(err))),
-            None => Poll::Ready(Ok(None)),
-        }
-    }
-}
-
 pub struct PluginCtx {
     table: ResourceTable,
     wasi_ctx: WasiCtx,

@@ -6,7 +6,7 @@ use corelib::device::xiaomi::components::{
 };
 use log::error;
 use serde_json::json;
-use wasmtime::component::{Access, FutureReader};
+use wasmtime::component::{Accessor, FutureReader};
 
 use super::{HostString, HostVec, PluginCtx, permission::check_permission_declared};
 
@@ -14,17 +14,17 @@ impl psys_host::thirdpartyapp::Host for PluginCtx {}
 
 impl psys_host::thirdpartyapp::HostWithStore for PluginCtx {
     fn launch_qa<T>(
-        mut store: Access<'_, T, Self>,
+        accessor: &Accessor<T, Self>,
         addr: HostString,
         app_info: psys_host::thirdpartyapp::AppInfo,
         page_name: HostString,
-    ) -> FutureReader<core::result::Result<(), ()>> {
-        let app_handle = store.get().app_handle();
-        let plugin_name = store.get().plugin_name().to_string();
-        let permissions = store.get().permissions();
-        let future = {
+    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
+        let app_handle = accessor.with(|mut access| access.get().app_handle());
+        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let permissions = accessor.with(|mut access| access.get().permissions());
+        let future = accessor.with(|mut access| {
             FutureReader::new(
-                &mut store,
+                &mut access,
                 crate::api::host::AnyhowFuture(async move {
                     let addr = addr.to_string();
                     let page_name = page_name.to_string();
@@ -55,20 +55,22 @@ impl psys_host::thirdpartyapp::HostWithStore for PluginCtx {
                     }
                 }),
             )
-        };
-        future.expect("failed to create host future reader")
+        });
+        async move { future.expect("failed to create host future reader") }
     }
 
     fn get_thirdparty_app_list<T>(
-        mut store: Access<'_, T, Self>,
+        accessor: &Accessor<T, Self>,
         addr: HostString,
-    ) -> FutureReader<core::result::Result<HostVec<psys_host::thirdpartyapp::AppInfo>, ()>> {
-        let app_handle = store.get().app_handle();
-        let plugin_name = store.get().plugin_name().to_string();
-        let permissions = store.get().permissions();
-        let future = {
+    ) -> impl core::future::Future<
+        Output = FutureReader<core::result::Result<HostVec<psys_host::thirdpartyapp::AppInfo>, ()>>,
+    > + Send {
+        let app_handle = accessor.with(|mut access| access.get().app_handle());
+        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let permissions = accessor.with(|mut access| access.get().permissions());
+        let future = accessor.with(|mut access| {
             FutureReader::new(
-                &mut store,
+                &mut access,
                 crate::api::host::AnyhowFuture(async move {
                     let addr = addr.to_string();
                     let params = json!({
@@ -106,8 +108,8 @@ impl psys_host::thirdpartyapp::HostWithStore for PluginCtx {
                     }
                 }),
             )
-        };
-        future.expect("failed to create host future reader")
+        });
+        async move { future.expect("failed to create host future reader") }
     }
 }
 
