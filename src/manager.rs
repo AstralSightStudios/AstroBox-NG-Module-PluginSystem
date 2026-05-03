@@ -408,7 +408,10 @@ impl PluginManager {
                 .dispatch_transport_packet(payload_base64.clone())
                 .await
             {
-                log::error!("[plugin:{}] Failed to deliver transport packet: {err}", name);
+                log::error!(
+                    "[plugin:{}] Failed to deliver transport packet: {err}",
+                    name
+                );
             }
         }
     }

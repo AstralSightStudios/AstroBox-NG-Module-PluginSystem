@@ -860,7 +860,9 @@ impl PluginRuntime {
         }
     }
 
-    fn map_ui_event_to_api3(event: &str) -> Option<crate::bindings_v3::astrobox::psys_host::ui_v3::Event> {
+    fn map_ui_event_to_api3(
+        event: &str,
+    ) -> Option<crate::bindings_v3::astrobox::psys_host::ui_v3::Event> {
         match Self::compact_ui_event(event).as_str() {
             "CLICK" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::Click),
             "HOVER" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::Hover),
@@ -870,9 +872,13 @@ impl PluginRuntime {
             "BLUR" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::Blur),
             "MOUSEENTER" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::MouseEnter),
             "MOUSELEAVE" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::MouseLeave),
-            "POINTERDOWN" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::PointerDown),
+            "POINTERDOWN" => {
+                Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::PointerDown)
+            }
             "POINTERUP" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::PointerUp),
-            "POINTERMOVE" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::PointerMove),
+            "POINTERMOVE" => {
+                Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::PointerMove)
+            }
             "KEYDOWN" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::KeyDown),
             "KEYUP" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::KeyUp),
             "LONGPRESS" => Some(crate::bindings_v3::astrobox::psys_host::ui_v3::Event::LongPress),
@@ -1098,9 +1104,7 @@ impl PluginRuntime {
                     normalized
                 )
             })?;
-            return self
-                .dispatch_ui_event_v3(event_id, mapped, payload)
-                .await;
+            return self.dispatch_ui_event_v3(event_id, mapped, payload).await;
         }
 
         let mapped = Self::map_ui_event_to_api2(&normalized).ok_or_else(|| {

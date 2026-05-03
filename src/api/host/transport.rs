@@ -3,10 +3,7 @@ use crate::transport_runtime;
 use anyhow::Error;
 use corelib::device::xiaomi::{
     XiaomiDevice,
-    packet::{
-        cipher,
-        v2::layer2::L2Channel,
-    },
+    packet::{cipher, v2::layer2::L2Channel},
 };
 use pb::xiaomi::protocol::WearPacket;
 use prost::Message;
