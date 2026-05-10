@@ -48,3 +48,4 @@ tauri-plugin-dialog = "2.7.1"
 tauri-plugin-fs = "2.5.1"
 tauri-plugin-opener = "2.5.4"
 frontbridge = { path = "../frontbridge" }
+url = "2.5"

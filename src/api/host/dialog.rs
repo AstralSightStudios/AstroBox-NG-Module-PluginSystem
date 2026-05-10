@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     io::Write,
+    path::PathBuf,
     sync::{
         Mutex as StdMutex,
         atomic::{AtomicU64, Ordering},
@@ -22,6 +23,38 @@ use super::{HostString, HostVec, PluginCtx};
 
 struct SaveFileSession {
     file: std::fs::File,
+}
+
+#[derive(Clone)]
+struct DialogFileFilter {
+    multiple: bool,
+    extensions: Vec<String>,
+    default_directory: String,
+    default_file_name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FrontFilePickerPayload {
+    context: String,
+    options: FrontFilePickerOptions,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FrontFilePickerOptions {
+    multiple: bool,
+    directory: bool,
+    filters: Vec<FrontFilePickerFilter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_path: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FrontFilePickerFilter {
+    name: String,
+    extensions: Vec<String>,
 }
 
 static SAVE_FILE_SESSION_ID: AtomicU64 = AtomicU64::new(1);
@@ -321,33 +354,14 @@ async fn pick_file_with_dialog(
     config: psys_host::dialog::PickConfig,
     filter: psys_host::dialog::FilterConfig,
 ) -> Result<psys_host::dialog::PickResult, Error> {
-    let multiple = filter.multiple;
-    let builder = configure_file_dialog_builder(app_handle.dialog().file(), filter);
-
-    let (tx, rx) = oneshot::channel();
-    if multiple {
-        builder.pick_files(move |paths| {
-            let _ = tx.send(paths);
-        });
-    } else {
-        builder.pick_file(move |path| {
-            let _ = tx.send(path.map(|item| vec![item]));
-        });
-    }
-
-    let selected = match rx.await {
-        Ok(Some(mut paths)) => {
-            if multiple && paths.len() > 1 {
-                log::warn!(
-                    "dialog::pick_file requested multiple files, returning the first selection"
-                );
-            }
-            paths.pop()
-        }
-        Ok(None) => None,
+    let filter = DialogFileFilter::from(filter);
+    let selected = match pick_file_with_frontend(&app_handle, &filter).await {
+        Ok(selected) => selected,
         Err(err) => {
-            log::error!("dialog::pick_file waiting for selection failed: {err}");
-            None
+            log::warn!(
+                "dialog::pick_file frontend picker failed, falling back to direct dialog: {err}"
+            );
+            pick_file_with_direct_dialog(&app_handle, &filter).await
         }
     };
 
@@ -393,29 +407,70 @@ async fn pick_file_with_dialog(
     })
 }
 
+async fn pick_file_with_frontend(
+    app_handle: &AppHandle,
+    filter: &DialogFileFilter,
+) -> Result<Option<FilePath>, Error> {
+    let payload = FrontFilePickerPayload {
+        context: "plugin:dialog.pick_file".to_string(),
+        options: FrontFilePickerOptions::from(filter),
+    };
+    let mut selected: Vec<String> =
+        frontbridge::invoke_frontend(app_handle, FRONT_FILE_OPEN_PICKER_METHOD, payload).await?;
+    if filter.multiple && selected.len() > 1 {
+        log::warn!("dialog::pick_file requested multiple files, returning the first selection");
+    }
+    Ok(selected.pop().map(file_path_from_frontend))
+}
+
+async fn pick_file_with_direct_dialog(
+    app_handle: &AppHandle,
+    filter: &DialogFileFilter,
+) -> Option<FilePath> {
+    let multiple = filter.multiple;
+    let builder = configure_file_dialog_builder(app_handle.dialog().file(), filter);
+
+    let (tx, rx) = oneshot::channel();
+    if multiple {
+        builder.pick_files(move |paths| {
+            let _ = tx.send(paths);
+        });
+    } else {
+        builder.pick_file(move |path| {
+            let _ = tx.send(path.map(|item| vec![item]));
+        });
+    }
+
+    match rx.await {
+        Ok(Some(mut paths)) => {
+            if multiple && paths.len() > 1 {
+                log::warn!(
+                    "dialog::pick_file requested multiple files, returning the first selection"
+                );
+            }
+            paths.pop()
+        }
+        Ok(None) => None,
+        Err(err) => {
+            log::error!("dialog::pick_file waiting for selection failed: {err}");
+            None
+        }
+    }
+}
+
 fn configure_file_dialog_builder<R: tauri::Runtime>(
     mut builder: tauri_plugin_dialog::FileDialogBuilder<R>,
-    filter: psys_host::dialog::FilterConfig,
+    filter: &DialogFileFilter,
 ) -> tauri_plugin_dialog::FileDialogBuilder<R> {
-    let psys_host::dialog::FilterConfig {
-        extensions,
-        default_directory,
-        default_file_name,
-        ..
-    } = filter;
-
-    let default_dir: String = default_directory.into();
-    if !default_dir.is_empty() {
-        builder = builder.set_directory(default_dir);
+    if !filter.default_directory.is_empty() {
+        builder = builder.set_directory(filter.default_directory.clone());
     }
-    let default_file_name: String = default_file_name.into();
-    if !default_file_name.is_empty() {
-        builder = builder.set_file_name(default_file_name);
+    if !filter.default_file_name.is_empty() {
+        builder = builder.set_file_name(filter.default_file_name.clone());
     }
 
-    let extensions: Vec<String> = extensions.into_iter().map(Into::into).collect();
-    if !extensions.is_empty() {
-        let exts: Vec<&str> = extensions.iter().map(String::as_str).collect();
+    if !filter.extensions.is_empty() {
+        let exts: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
         builder = builder.add_filter("files", &exts);
     }
     builder
@@ -426,7 +481,8 @@ async fn save_file_start_with_dialog(
     plugin_name: String,
     filter: psys_host::dialog::FilterConfig,
 ) -> core::result::Result<psys_host::dialog::SaveSession, ()> {
-    let builder = configure_file_dialog_builder(app_handle.dialog().file(), filter);
+    let filter = DialogFileFilter::from(filter);
+    let builder = configure_file_dialog_builder(app_handle.dialog().file(), &filter);
     let (tx, rx) = oneshot::channel();
     builder.save_file(move |path| {
         let _ = tx.send(path);
@@ -583,6 +639,7 @@ impl From<psys_host::dialog::DialogButton> for ButtonSpec {
 }
 
 const WEBSITE_DIALOG_METHOD: &str = "host/dialog/show_dialog";
+const FRONT_FILE_OPEN_PICKER_METHOD: &str = "host/file/open_picker";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -658,5 +715,60 @@ impl From<psys_host::dialog::DialogButton> for WebsiteDialogButton {
             primary: button.primary,
             content: button.content.into(),
         }
+    }
+}
+
+impl From<psys_host::dialog::FilterConfig> for DialogFileFilter {
+    fn from(filter: psys_host::dialog::FilterConfig) -> Self {
+        Self {
+            multiple: filter.multiple,
+            extensions: filter.extensions.into_iter().map(Into::into).collect(),
+            default_directory: filter.default_directory.into(),
+            default_file_name: filter.default_file_name.into(),
+        }
+    }
+}
+
+impl From<&DialogFileFilter> for FrontFilePickerOptions {
+    fn from(filter: &DialogFileFilter) -> Self {
+        let filters = if filter.extensions.is_empty() {
+            Vec::new()
+        } else {
+            vec![FrontFilePickerFilter {
+                name: "files".to_string(),
+                extensions: filter.extensions.clone(),
+            }]
+        };
+
+        Self {
+            multiple: filter.multiple,
+            directory: false,
+            filters,
+            default_path: build_default_picker_path(filter),
+        }
+    }
+}
+
+fn build_default_picker_path(filter: &DialogFileFilter) -> Option<String> {
+    match (
+        filter.default_directory.trim().is_empty(),
+        filter.default_file_name.trim().is_empty(),
+    ) {
+        (true, true) => None,
+        (false, true) => Some(filter.default_directory.clone()),
+        (true, false) => Some(filter.default_file_name.clone()),
+        (false, false) => Some(
+            PathBuf::from(&filter.default_directory)
+                .join(&filter.default_file_name)
+                .to_string_lossy()
+                .to_string(),
+        ),
+    }
+}
+
+fn file_path_from_frontend(path: String) -> FilePath {
+    match url::Url::parse(&path) {
+        Ok(url) if url.scheme().len() != 1 => FilePath::Url(url),
+        _ => FilePath::Path(PathBuf::from(path)),
     }
 }
