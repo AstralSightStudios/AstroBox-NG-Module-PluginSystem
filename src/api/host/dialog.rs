@@ -82,9 +82,9 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
     {
         let instance = accessor.instance();
         let future = accessor.with(|mut access| {
-            let app_handle = {
+            let (app_handle, plugin_name) = {
                 let ctx = access.get();
-                ctx.app_handle()
+                (ctx.app_handle(), ctx.plugin_name().to_string())
             };
             FutureReader::new(instance, &mut access, async move {
                 match (dialog_type, style) {
@@ -93,7 +93,7 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                         psys_host::dialog::DialogStyle::System,
                     ) => show_system_alert(app_handle, info).await,
                     (_, psys_host::dialog::DialogStyle::Website) => {
-                        show_website_dialog(app_handle, dialog_type, info).await
+                        show_website_dialog(app_handle, plugin_name, dialog_type, info).await
                     }
                     _ => {
                         log::warn!(
@@ -326,10 +326,11 @@ async fn show_system_alert(
 
 async fn show_website_dialog(
     app_handle: AppHandle,
+    plugin_name: String,
     dialog_type: psys_host::dialog::DialogType,
     info: psys_host::dialog::DialogInfo,
 ) -> Result<psys_host::dialog::DialogResult, Error> {
-    let payload = WebsiteDialogPayload::from(dialog_type, info);
+    let payload = WebsiteDialogPayload::from(plugin_name, dialog_type, info);
     match frontbridge::invoke_frontend::<WebsiteDialogResult, _>(
         &app_handle,
         WEBSITE_DIALOG_METHOD,
@@ -644,6 +645,7 @@ const FRONT_FILE_OPEN_PICKER_METHOD: &str = "host/file/open_picker";
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebsiteDialogPayload {
+    plugin: String,
     dialog_type: WebsiteDialogType,
     info: WebsiteDialogInfo,
 }
@@ -680,6 +682,7 @@ struct WebsiteDialogResult {
 
 impl WebsiteDialogPayload {
     fn from(
+        plugin: String,
         dialog_type: psys_host::dialog::DialogType,
         info: psys_host::dialog::DialogInfo,
     ) -> Self {
@@ -688,6 +691,7 @@ impl WebsiteDialogPayload {
             psys_host::dialog::DialogType::Input => WebsiteDialogType::Input,
         };
         Self {
+            plugin,
             dialog_type,
             info: WebsiteDialogInfo::from(info),
         }
