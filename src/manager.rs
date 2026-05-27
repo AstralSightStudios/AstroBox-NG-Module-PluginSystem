@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use frontbridge::invoke_frontend;
+use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -350,23 +351,48 @@ impl PluginManager {
         pkg_name: &str,
         payload: String,
     ) {
-        let active_plugins = self
+        let mut active_plugins = self
             .plugins
             .iter()
             .filter(|(_, plugin)| plugin.state.loaded && !plugin.state.disabled)
             .map(|(name, plugin)| (name.clone(), plugin.runtime.clone()))
             .collect::<Vec<_>>();
+        active_plugins.sort_by(|left, right| left.0.cmp(&right.0));
 
+        let mut matched = Vec::new();
         for (name, runtime) in active_plugins {
-            if !runtime.matches_interconnect(addr, pkg_name).await {
-                continue;
+            if runtime.matches_interconnect(addr, pkg_name).await {
+                matched.push((name, runtime));
             }
+        }
 
-            if let Err(err) = runtime.dispatch_interconnect_message(payload.clone()).await {
-                log::error!(
-                    "[plugin:{}] Failed to deliver interconnect message: {err}",
-                    name
-                );
+        if matched.is_empty() {
+            return;
+        }
+
+        log::debug!(
+            "[pluginsystem] interconnect dispatch addr={} pkg={} -> {} receiver(s)",
+            addr,
+            pkg_name,
+            matched.len()
+        );
+
+        let mut handles = Vec::with_capacity(matched.len());
+        for (name, runtime) in matched {
+            let payload = payload.clone();
+            handles.push(tokio::spawn(async move {
+                if let Err(err) = runtime.dispatch_interconnect_message(payload).await {
+                    log::error!(
+                        "[plugin:{}] Failed to deliver interconnect message: {err}",
+                        name
+                    );
+                }
+            }));
+        }
+
+        for handle in join_all(handles).await {
+            if let Err(err) = handle {
+                log::error!("[pluginsystem] interconnect dispatch task panicked: {err}");
             }
         }
     }
@@ -395,23 +421,44 @@ impl PluginManager {
             .collect::<Vec<_>>();
         active_plugins.sort_by(|left, right| left.0.cmp(&right.0));
 
-        let payload_base64 = BASE64_STANDARD.encode(&payload);
+        let mut matched = Vec::new();
         for (name, runtime) in active_plugins {
-            if !runtime
+            if runtime
                 .matches_transport(addr, channel_id, protobuf_type_id)
                 .await
             {
-                continue;
+                matched.push((name, runtime));
             }
+        }
 
-            if let Err(err) = runtime
-                .dispatch_transport_packet(payload_base64.clone())
-                .await
-            {
-                log::error!(
-                    "[plugin:{}] Failed to deliver transport packet: {err}",
-                    name
-                );
+        if matched.is_empty() {
+            return;
+        }
+
+        let payload_base64 = BASE64_STANDARD.encode(&payload);
+        log::debug!(
+            "[pluginsystem] transport dispatch addr={} channel={} -> {} receiver(s)",
+            addr,
+            channel_id,
+            matched.len()
+        );
+
+        let mut handles = Vec::with_capacity(matched.len());
+        for (name, runtime) in matched {
+            let payload = payload_base64.clone();
+            handles.push(tokio::spawn(async move {
+                if let Err(err) = runtime.dispatch_transport_packet(payload).await {
+                    log::error!(
+                        "[plugin:{}] Failed to deliver transport packet: {err}",
+                        name
+                    );
+                }
+            }));
+        }
+
+        for handle in join_all(handles).await {
+            if let Err(err) = handle {
+                log::error!("[pluginsystem] transport dispatch task panicked: {err}");
             }
         }
     }
