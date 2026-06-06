@@ -200,6 +200,8 @@ impl PluginRegisterState {
 const PRECOMPILE_INDEX_FILE: &str = "precompiled-index.json";
 const PLUGIN_STDIO_PENDING_LIMIT: usize = 8 * 1024;
 
+static PLUGIN_EXEC_LOCK: Mutex<()> = Mutex::const_new(());
+
 #[derive(Clone, Copy)]
 enum PluginStdioKind {
     Stdout,
@@ -762,6 +764,7 @@ impl PluginRuntime {
             let mut guard = self.instance.lock().await;
             *guard = None;
         }
+        let _exec = PLUGIN_EXEC_LOCK.lock().await;
         if self.api_level >= 3 {
             let instance = PsysWorldV3::instantiate_async(&mut store, &self.component, &linker)
                 .await
@@ -891,6 +894,7 @@ impl PluginRuntime {
         event_type: psys_plugin::event::EventType,
         payload: String,
     ) -> Result<()> {
+        let _exec = PLUGIN_EXEC_LOCK.lock().await;
         let mut guard = self.instance.lock().await;
         let instance = guard
             .as_mut()
@@ -954,6 +958,7 @@ impl PluginRuntime {
     }
 
     pub async fn dispatch_ui_render(&self, element_id: String) -> Result<()> {
+        let _exec = PLUGIN_EXEC_LOCK.lock().await;
         let mut guard = self.instance.lock().await;
         let instance = guard
             .as_mut()
@@ -991,6 +996,7 @@ impl PluginRuntime {
     }
 
     pub async fn dispatch_card_render(&self, element_id: String) -> Result<()> {
+        let _exec = PLUGIN_EXEC_LOCK.lock().await;
         let mut guard = self.instance.lock().await;
         let instance = guard
             .as_mut()
@@ -1033,6 +1039,7 @@ impl PluginRuntime {
         event: psys_host::ui::Event,
         payload: String,
     ) -> Result<()> {
+        let _exec = PLUGIN_EXEC_LOCK.lock().await;
         let mut guard = self.instance.lock().await;
         let instance = guard
             .as_mut()
@@ -1064,6 +1071,7 @@ impl PluginRuntime {
         event: crate::bindings_v3::astrobox::psys_host::ui_v3::Event,
         payload: String,
     ) -> Result<()> {
+        let _exec = PLUGIN_EXEC_LOCK.lock().await;
         let mut guard = self.instance.lock().await;
         let instance = guard
             .as_mut()

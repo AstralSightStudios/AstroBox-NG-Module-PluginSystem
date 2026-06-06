@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use rand::Rng;
 use rand::distr::Alphanumeric;
-use serde::Serialize;
-use tauri::Emitter;
-use wasmtime::component::Resource;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
+use wasmtime::component::{Accessor, FutureReader, Resource};
 
 use crate::bindings::astrobox::psys_host;
 
@@ -275,6 +275,84 @@ impl psys_host::ui_v3::Host for PluginCtx {
         );
 
         Ok(())
+    }
+}
+
+const FRONT_RENDER_SIZE_METHOD: &str = "host/ui/render_size";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RenderSizeRequest {
+    plugin: String,
+}
+
+#[derive(Deserialize)]
+struct RenderSizeResponse {
+    #[serde(default)]
+    width: f64,
+    #[serde(default)]
+    height: f64,
+}
+
+fn clamp_dimension(value: f64) -> u32 {
+    if value.is_finite() && value > 0.0 {
+        value.floor() as u32
+    } else {
+        0
+    }
+}
+
+const RENDER_SIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(800);
+
+async fn fetch_render_size(app_handle: &AppHandle, plugin_name: String) -> psys_host::ui_v3::RenderSize {
+    let zero = psys_host::ui_v3::RenderSize {
+        width: 0,
+        height: 0,
+    };
+    let payload = RenderSizeRequest {
+        plugin: plugin_name.clone(),
+    };
+    let request = frontbridge::invoke_frontend::<RenderSizeResponse, _>(
+        app_handle,
+        FRONT_RENDER_SIZE_METHOD,
+        payload,
+    );
+    match tokio::time::timeout(RENDER_SIZE_TIMEOUT, request).await {
+        Ok(Ok(resp)) => psys_host::ui_v3::RenderSize {
+            width: clamp_dimension(resp.width),
+            height: clamp_dimension(resp.height),
+        },
+        Ok(Err(err)) => {
+            log::warn!(
+                "[plugin:{}] failed to query ui render size: {err}",
+                plugin_name
+            );
+            zero
+        }
+        Err(_) => {
+            log::warn!(
+                "[plugin:{}] ui render size query timed out",
+                plugin_name
+            );
+            zero
+        }
+    }
+}
+
+impl psys_host::ui_v3::HostWithStore for PluginCtx {
+    fn get_render_size<T>(
+        accessor: &Accessor<T, Self>,
+    ) -> impl core::future::Future<Output = FutureReader<psys_host::ui_v3::RenderSize>> + Send {
+        let instance = accessor.instance();
+        let app_handle = accessor.with(|mut access| access.get().app_handle());
+        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let future = accessor.with(|mut access| {
+            FutureReader::new(instance, &mut access, async move {
+                let size = fetch_render_size(&app_handle, plugin_name).await;
+                Ok::<psys_host::ui_v3::RenderSize, anyhow::Error>(size)
+            })
+        });
+        async move { future }
     }
 }
 impl psys_host::ui_v3::HostElement for PluginCtx {

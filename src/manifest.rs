@@ -20,6 +20,8 @@ pub struct PluginManifest {
     pub additional_files: Vec<String>, // 插件附加文件列表
     #[serde(default, rename = "enableSettingsButton", alias = "enable_settings_button", skip_serializing_if = "Option::is_none")]
     pub enable_settings_button: Option<bool>, // 是否在插件窗口右上角显示设置按钮
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_default_padding: Option<bool>, // 是否去掉插件UI渲染区域的默认内边距
 }
 
 impl PluginManifest {

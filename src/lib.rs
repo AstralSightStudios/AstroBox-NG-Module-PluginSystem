@@ -54,6 +54,7 @@ pub mod bindings {
             "astrobox:psys-host/watchface/get-watchface-list": async | store,
             "astrobox:psys-host/watchface/set-current-watchface": async | store,
             "astrobox:psys-host/i18n/load-json": async | store,
+            "astrobox:psys-host/ui-v3/get-render-size": async | store,
             default: trappable
         },
         exports: {
@@ -102,6 +103,7 @@ pub mod bindings_v3 {
             "astrobox:psys-host/watchface/get-watchface-list": async | store,
             "astrobox:psys-host/watchface/set-current-watchface": async | store,
             "astrobox:psys-host/i18n/load-json": async | store,
+            "astrobox:psys-host/ui-v3/get-render-size": async | store,
             default: trappable
         },
         exports: {
