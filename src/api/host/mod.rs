@@ -87,6 +87,7 @@ impl wasmtime::component::HasData for PluginCtx {
     type Data<'a> = &'a mut PluginCtx;
 }
 
+mod clipboard;
 mod device;
 mod dialog;
 mod event;

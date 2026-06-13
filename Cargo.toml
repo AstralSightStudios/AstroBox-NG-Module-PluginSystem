@@ -44,6 +44,7 @@ hex = "0.4"
 # Wasmtime WASI APIs
 wasmtime-wasi-http = "38.0.3"
 tauri = { version = "2.11.0", features = ["rustls-tls"] }
+tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-fs = "2.5.1"
 tauri-plugin-opener = "2.5.4"
