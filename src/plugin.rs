@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWrite;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use wasmtime::component::{Component, FutureConsumer, Linker, Source};
 use wasmtime::{Config, Engine, Store, StoreContextMut};
@@ -596,10 +596,46 @@ enum PluginInstance {
         store: Store<PluginCtx>,
         world: PsysWorld,
     },
+    /// api_level>=3 instances do not keep the `Store` here. Instead a dedicated
+    /// driver task owns the store and runs a persistent `Instance::run_concurrent`
+    /// event loop, so guest background tasks (`spawn`) keep progressing between
+    /// dispatches. All guest entry points are funneled to it via `V3Command`.
     V3 {
-        store: Store<PluginCtx>,
-        world: PsysWorldV3,
+        driver: V3Driver,
     },
+}
+
+/// Reply channel for a V3 command: `Ok(())` once the guest export call has been
+/// started (and its result future piped for draining), or the trap/error.
+type V3Reply = oneshot::Sender<Result<()>>;
+
+/// A guest entry point to run inside the V3 driver's event loop.
+enum V3Command {
+    OnEvent {
+        event_type: psys_plugin_v3::EventType,
+        payload: String,
+        reply: V3Reply,
+    },
+    OnUiEvent {
+        event_id: String,
+        event: crate::bindings_v3::astrobox::psys_host::ui_v3::Event,
+        payload: String,
+        reply: V3Reply,
+    },
+    OnUiRender {
+        element_id: String,
+        reply: V3Reply,
+    },
+    OnCardRender {
+        element_id: String,
+        reply: V3Reply,
+    },
+}
+
+/// Handle to a V3 instance's persistent driver task.
+struct V3Driver {
+    cmd_tx: mpsc::UnboundedSender<V3Command>,
+    handle: JoinHandle<()>,
 }
 
 struct DrainStringFuture;
@@ -635,6 +671,157 @@ impl<D> FutureConsumer<D> for DrainUnitFuture {
         let mut value = None;
         source.read(store, &mut value)?;
         Poll::Ready(Ok(()))
+    }
+}
+
+/// The body of an api_level>=3 instance's persistent driver task.
+///
+/// Instantiates the component, runs `on_load`, then services `V3Command`s on a
+/// single `Instance::run_concurrent` event loop. Because the loop is always
+/// either running an export or parked on `cmd_rx.recv()` (still Pending), the
+/// instance's background tasks (`spawn`) are continuously polled and progress
+/// without needing a fresh dispatch — and without holding any global lock.
+async fn v3_driver_loop(
+    mut store: Store<PluginCtx>,
+    linker: Linker<PluginCtx>,
+    component: Component,
+    name: String,
+    ready_tx: oneshot::Sender<Result<()>>,
+    mut cmd_rx: mpsc::UnboundedReceiver<V3Command>,
+) {
+    let instance = match linker.instantiate_async(&mut store, &component).await {
+        Ok(instance) => instance,
+        Err(err) => {
+            let _ = ready_tx.send(Err(anyhow::anyhow!(
+                "Failed to instantiate plugin component for api_level=3. detail: {}",
+                err
+            )));
+            return;
+        }
+    };
+
+    let world = match PsysWorldV3::new(&mut store, &instance) {
+        Ok(world) => world,
+        Err(err) => {
+            let _ = ready_tx.send(Err(anyhow::anyhow!(
+                "Failed to load plugin bindings for api_level=3. detail: {}",
+                err
+            )));
+            return;
+        }
+    };
+
+    let mut ready_tx = Some(ready_tx);
+    let result = instance
+        .run_concurrent(&mut store, async move |accessor| -> Result<()> {
+            // on_load runs first; report readiness (or the failure) exactly once.
+            match world
+                .astrobox_psys_plugin_lifecycle()
+                .call_on_load(accessor)
+                .await
+            {
+                Ok(()) => {
+                    if let Some(tx) = ready_tx.take() {
+                        let _ = tx.send(Ok(()));
+                    }
+                }
+                Err(err) => {
+                    if let Some(tx) = ready_tx.take() {
+                        let _ = tx.send(Err(anyhow::anyhow!(
+                            "Failed to execute the plugin on-load callback. detail: {}",
+                            err
+                        )));
+                    }
+                    return Err(err);
+                }
+            }
+
+            // Command loop. The channel closing (all senders dropped, e.g. on
+            // teardown) ends the loop and returns the event loop.
+            while let Some(cmd) = cmd_rx.recv().await {
+                let event_v3 = world.astrobox_psys_plugin_event_v3();
+                match cmd {
+                    V3Command::OnEvent {
+                        event_type,
+                        payload,
+                        reply,
+                    } => {
+                        let result = match event_v3
+                            .call_on_event(accessor, event_type, payload)
+                            .await
+                        {
+                            Ok(future) => {
+                                accessor.with(move |mut access| {
+                                    future.pipe(&mut access, DrainStringFuture);
+                                });
+                                Ok(())
+                            }
+                            Err(err) => Err(err),
+                        };
+                        let _ = reply.send(result);
+                    }
+                    V3Command::OnUiEvent {
+                        event_id,
+                        event,
+                        payload,
+                        reply,
+                    } => {
+                        let result = match event_v3
+                            .call_on_ui_event_v3(accessor, event_id, event, payload)
+                            .await
+                        {
+                            Ok(future) => {
+                                accessor.with(move |mut access| {
+                                    future.pipe(&mut access, DrainStringFuture);
+                                });
+                                Ok(())
+                            }
+                            Err(err) => Err(err),
+                        };
+                        let _ = reply.send(result);
+                    }
+                    V3Command::OnUiRender { element_id, reply } => {
+                        let result = match event_v3
+                            .call_on_ui_render(accessor, element_id)
+                            .await
+                        {
+                            Ok(future) => {
+                                accessor.with(move |mut access| {
+                                    future.pipe(&mut access, DrainUnitFuture);
+                                });
+                                Ok(())
+                            }
+                            Err(err) => Err(err),
+                        };
+                        let _ = reply.send(result);
+                    }
+                    V3Command::OnCardRender { element_id, reply } => {
+                        let result = match event_v3
+                            .call_on_card_render(accessor, element_id)
+                            .await
+                        {
+                            Ok(future) => {
+                                accessor.with(move |mut access| {
+                                    future.pipe(&mut access, DrainUnitFuture);
+                                });
+                                Ok(())
+                            }
+                            Err(err) => Err(err),
+                        };
+                        let _ = reply.send(result);
+                    }
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    match result {
+        Ok(Ok(())) => log::info!("[plugin:{}] v3 driver event loop ended", name),
+        Ok(Err(err)) | Err(err) => {
+            log::error!("[plugin:{}] v3 driver event loop exited with error: {err}", name)
+        }
     }
 }
 
@@ -764,33 +951,16 @@ impl PluginRuntime {
             let mut guard = self.instance.lock().await;
             *guard = None;
         }
-        let _exec = PLUGIN_EXEC_LOCK.lock().await;
+
+        // api_level>=3 runs on the persistent concurrent driver and must NOT
+        // hold the global PLUGIN_EXEC_LOCK (that would serialize/freeze every
+        // plugin for as long as the driver lives). Its store is owned solely by
+        // the driver task, so intra-plugin access is serialized by construction.
         if self.api_level >= 3 {
-            let instance = PsysWorldV3::instantiate_async(&mut store, &self.component, &linker)
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "Failed to instantiate plugin component for api_level=3. detail: {}",
-                        e.to_string()
-                    )
-                })?;
-
-            log::info!("[plugin:{}] Calling on_load...", self.name.clone());
-            self.emit_progress("on_load", None);
-            let lifecycle = instance.astrobox_psys_plugin_lifecycle();
-            lifecycle
-                .call_on_load(&mut store)
-                .await
-                .context("Failed to execute the plugin on-load callback")?;
-
-            let mut guard = self.instance.lock().await;
-            *guard = Some(PluginInstance::V3 {
-                store,
-                world: instance,
-            });
-            return Ok(());
+            return self.run_v3(store, linker).await;
         }
 
+        let _exec = PLUGIN_EXEC_LOCK.lock().await;
         let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
             .await
             .map_err(|e| {
@@ -815,6 +985,115 @@ impl PluginRuntime {
         });
 
         Ok(())
+    }
+
+    /// Spawn the persistent concurrent driver for an api_level>=3 instance.
+    ///
+    /// The driver task owns the `Store` for the instance's lifetime and runs a
+    /// single long-lived `Instance::run_concurrent` whose body is a command
+    /// loop. While it waits on the command channel the event loop keeps polling
+    /// the instance's background tasks, so guest `spawn`s (e.g. a dialog flow)
+    /// make progress immediately instead of stalling until the next dispatch.
+    async fn run_v3(&self, store: Store<PluginCtx>, linker: Linker<PluginCtx>) -> Result<()> {
+        log::info!("[plugin:{}] Calling on_load...", self.name.clone());
+        self.emit_progress("on_load", None);
+
+        let component = self.component.clone();
+        let name = self.name.clone();
+        let (ready_tx, ready_rx) = oneshot::channel::<Result<()>>();
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<V3Command>();
+
+        let handle = tokio::spawn(v3_driver_loop(
+            store,
+            linker,
+            component,
+            name.clone(),
+            ready_tx,
+            cmd_rx,
+        ));
+
+        match ready_rx.await {
+            Ok(Ok(())) => {
+                let mut guard = self.instance.lock().await;
+                *guard = Some(PluginInstance::V3 {
+                    driver: V3Driver { cmd_tx, handle },
+                });
+                Ok(())
+            }
+            Ok(Err(err)) => {
+                handle.abort();
+                Err(err)
+            }
+            Err(_) => Err(anyhow::anyhow!(
+                "plugin '{}' v3 driver terminated before initialization",
+                name
+            )),
+        }
+    }
+
+    /// Send a command to this plugin's V3 driver and await the dispatch result.
+    ///
+    /// Only the (quick) synchronous portion of the guest handler is awaited
+    /// here; any work the guest defers to a background `spawn` continues to run
+    /// inside the driver's event loop after this returns, without holding any
+    /// lock.
+    async fn send_v3_command(
+        &self,
+        build: impl FnOnce(V3Reply) -> V3Command,
+    ) -> Result<()> {
+        let cmd_tx = {
+            let guard = self.instance.lock().await;
+            match guard.as_ref() {
+                Some(PluginInstance::V3 { driver }) => driver.cmd_tx.clone(),
+                Some(_) => {
+                    return Err(anyhow::anyhow!(
+                        "plugin '{}' instance is not an api_level>=3 instance",
+                        self.name
+                    ));
+                }
+                None => {
+                    return Err(anyhow::anyhow!(
+                        "Plugin '{}' instance is not initialized",
+                        self.name
+                    ));
+                }
+            }
+        };
+
+        let (reply_tx, reply_rx) = oneshot::channel::<Result<()>>();
+        cmd_tx.send(build(reply_tx)).map_err(|_| {
+            anyhow::anyhow!("plugin '{}' v3 driver is not running", self.name)
+        })?;
+
+        match reply_rx.await {
+            Ok(result) => result,
+            Err(_) => Err(anyhow::anyhow!(
+                "plugin '{}' v3 driver dropped before replying",
+                self.name
+            )),
+        }
+    }
+
+    fn map_event_type_to_v3(event_type: psys_plugin::event::EventType) -> psys_plugin_v3::EventType {
+        match event_type {
+            psys_plugin::event::EventType::PluginMessage => {
+                psys_plugin_v3::EventType::PluginMessage
+            }
+            psys_plugin::event::EventType::InterconnectMessage => {
+                psys_plugin_v3::EventType::InterconnectMessage
+            }
+            psys_plugin::event::EventType::DeviceAction => psys_plugin_v3::EventType::DeviceAction,
+            psys_plugin::event::EventType::ProviderAction => {
+                psys_plugin_v3::EventType::ProviderAction
+            }
+            psys_plugin::event::EventType::DeeplinkAction => {
+                psys_plugin_v3::EventType::DeeplinkAction
+            }
+            psys_plugin::event::EventType::TransportPacket => {
+                psys_plugin_v3::EventType::TransportPacket
+            }
+            psys_plugin::event::EventType::Timer => psys_plugin_v3::EventType::Timer,
+        }
     }
 
     fn compact_ui_event(event: &str) -> String {
@@ -894,141 +1173,105 @@ impl PluginRuntime {
         event_type: psys_plugin::event::EventType,
         payload: String,
     ) -> Result<()> {
+        if self.api_level >= 3 {
+            let event_type = Self::map_event_type_to_v3(event_type);
+            return self
+                .send_v3_command(move |reply| V3Command::OnEvent {
+                    event_type,
+                    payload,
+                    reply,
+                })
+                .await;
+        }
+
         let _exec = PLUGIN_EXEC_LOCK.lock().await;
         let mut guard = self.instance.lock().await;
         let instance = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
-        match instance {
-            PluginInstance::V2 { store, world } => {
-                let event_iface = world.astrobox_psys_plugin_event();
-                let future = event_iface
-                    .call_on_event(&mut *store, event_type, payload.as_str())
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to start the plugin on-event callback. detail: {}",
-                            e.to_string()
-                        )
-                    })?;
-                future.pipe(&mut *store, DrainStringFuture);
-            }
-            PluginInstance::V3 { store, world } => {
-                let event_iface = world.astrobox_psys_plugin_event_v3();
-                let future = event_iface
-                    .call_on_event(
-                        &mut *store,
-                        match event_type {
-                            psys_plugin::event::EventType::PluginMessage => {
-                                psys_plugin_v3::EventType::PluginMessage
-                            }
-                            psys_plugin::event::EventType::InterconnectMessage => {
-                                psys_plugin_v3::EventType::InterconnectMessage
-                            }
-                            psys_plugin::event::EventType::DeviceAction => {
-                                psys_plugin_v3::EventType::DeviceAction
-                            }
-                            psys_plugin::event::EventType::ProviderAction => {
-                                psys_plugin_v3::EventType::ProviderAction
-                            }
-                            psys_plugin::event::EventType::DeeplinkAction => {
-                                psys_plugin_v3::EventType::DeeplinkAction
-                            }
-                            psys_plugin::event::EventType::TransportPacket => {
-                                psys_plugin_v3::EventType::TransportPacket
-                            }
-                            psys_plugin::event::EventType::Timer => {
-                                psys_plugin_v3::EventType::Timer
-                            }
-                        },
-                        payload.as_str(),
-                    )
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to start the plugin on-event-v3 callback. detail: {}",
-                            e.to_string()
-                        )
-                    })?;
-                future.pipe(&mut *store, DrainStringFuture);
-            }
-        }
+        let PluginInstance::V2 { store, world } = instance else {
+            return Err(anyhow::anyhow!(
+                "Plugin '{}' api_level<3 but instance is not V2",
+                self.name
+            ));
+        };
+        let event_iface = world.astrobox_psys_plugin_event();
+        let future = event_iface
+            .call_on_event(&mut *store, event_type, payload.as_str())
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to start the plugin on-event callback. detail: {}",
+                    e.to_string()
+                )
+            })?;
+        future.pipe(&mut *store, DrainStringFuture);
         tokio::task::yield_now().await;
         Ok(())
     }
 
     pub async fn dispatch_ui_render(&self, element_id: String) -> Result<()> {
+        if self.api_level >= 3 {
+            return self
+                .send_v3_command(move |reply| V3Command::OnUiRender { element_id, reply })
+                .await;
+        }
+
         let _exec = PLUGIN_EXEC_LOCK.lock().await;
         let mut guard = self.instance.lock().await;
         let instance = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
-        match instance {
-            PluginInstance::V2 { store, world } => {
-                let event_iface = world.astrobox_psys_plugin_event();
-                let future = event_iface
-                    .call_on_ui_render(&mut *store, element_id.as_str())
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to start the plugin on-ui-render callback. detail: {}",
-                            e.to_string()
-                        )
-                    })?;
-                future.pipe(&mut *store, DrainUnitFuture);
-            }
-            PluginInstance::V3 { store, world } => {
-                let event_iface = world.astrobox_psys_plugin_event_v3();
-                let future = event_iface
-                    .call_on_ui_render(&mut *store, element_id.as_str())
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to start the plugin on-ui-render-v3 callback. detail: {}",
-                            e.to_string()
-                        )
-                    })?;
-                future.pipe(&mut *store, DrainUnitFuture);
-            }
-        }
+        let PluginInstance::V2 { store, world } = instance else {
+            return Err(anyhow::anyhow!(
+                "Plugin '{}' api_level<3 but instance is not V2",
+                self.name
+            ));
+        };
+        let event_iface = world.astrobox_psys_plugin_event();
+        let future = event_iface
+            .call_on_ui_render(&mut *store, element_id.as_str())
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to start the plugin on-ui-render callback. detail: {}",
+                    e.to_string()
+                )
+            })?;
+        future.pipe(&mut *store, DrainUnitFuture);
         tokio::task::yield_now().await;
         Ok(())
     }
 
     pub async fn dispatch_card_render(&self, element_id: String) -> Result<()> {
+        if self.api_level >= 3 {
+            return self
+                .send_v3_command(move |reply| V3Command::OnCardRender { element_id, reply })
+                .await;
+        }
+
         let _exec = PLUGIN_EXEC_LOCK.lock().await;
         let mut guard = self.instance.lock().await;
         let instance = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
-        match instance {
-            PluginInstance::V2 { store, world } => {
-                let event_iface = world.astrobox_psys_plugin_event();
-                let future = event_iface
-                    .call_on_card_render(&mut *store, element_id.as_str())
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to start the plugin on-card-render callback. detail: {}",
-                            e.to_string()
-                        )
-                    })?;
-                future.pipe(&mut *store, DrainUnitFuture);
-            }
-            PluginInstance::V3 { store, world } => {
-                let event_iface = world.astrobox_psys_plugin_event_v3();
-                let future = event_iface
-                    .call_on_card_render(&mut *store, element_id.as_str())
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to start the plugin on-card-render-v3 callback. detail: {}",
-                            e.to_string()
-                        )
-                    })?;
-                future.pipe(&mut *store, DrainUnitFuture);
-            }
-        }
+        let PluginInstance::V2 { store, world } = instance else {
+            return Err(anyhow::anyhow!(
+                "Plugin '{}' api_level<3 but instance is not V2",
+                self.name
+            ));
+        };
+        let event_iface = world.astrobox_psys_plugin_event();
+        let future = event_iface
+            .call_on_card_render(&mut *store, element_id.as_str())
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to start the plugin on-card-render callback. detail: {}",
+                    e.to_string()
+                )
+            })?;
+        future.pipe(&mut *store, DrainUnitFuture);
         tokio::task::yield_now().await;
         Ok(())
     }
@@ -1071,30 +1314,13 @@ impl PluginRuntime {
         event: crate::bindings_v3::astrobox::psys_host::ui_v3::Event,
         payload: String,
     ) -> Result<()> {
-        let _exec = PLUGIN_EXEC_LOCK.lock().await;
-        let mut guard = self.instance.lock().await;
-        let instance = guard
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
-        let PluginInstance::V3 { store, world } = instance else {
-            return Err(anyhow::anyhow!(
-                "Plugin '{}' api_level<3 should not use on-ui-event-v3",
-                self.name
-            ));
-        };
-        let event_iface = world.astrobox_psys_plugin_event_v3();
-        let future = event_iface
-            .call_on_ui_event_v3(&mut *store, event_id.as_str(), event, payload.as_str())
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to start the plugin on-ui-event-v3 callback. detail: {}",
-                    e.to_string()
-                )
-            })?;
-        future.pipe(&mut *store, DrainStringFuture);
-        tokio::task::yield_now().await;
-        Ok(())
+        self.send_v3_command(move |reply| V3Command::OnUiEvent {
+            event_id,
+            event,
+            payload,
+            reply,
+        })
+        .await
     }
 
     pub async fn dispatch_ui_event(
@@ -1197,9 +1423,19 @@ impl PluginRuntime {
     }
 
     pub async fn clear_instance(&self) {
-        let mut guard = self.instance.lock().await;
-        *guard = None;
-        drop(guard);
+        let previous = {
+            let mut guard = self.instance.lock().await;
+            guard.take()
+        };
+        // For V3, drop our command sender (closes the channel so the loop ends)
+        // and force-stop the driver, then await it so the store is fully torn
+        // down before any reload reuses the plugin's files.
+        if let Some(PluginInstance::V3 { driver }) = previous {
+            let V3Driver { cmd_tx, handle } = driver;
+            drop(cmd_tx);
+            handle.abort();
+            let _ = handle.await;
+        }
         self.register_state.reset_runtime_state().await;
     }
 }
