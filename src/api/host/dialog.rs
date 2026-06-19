@@ -10,7 +10,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, FilePath, MessageDialogButtons, MessageDialogResult};
 use tauri_plugin_fs::{FsExt, OpenOptions};
 use tauri_plugin_opener::OpenerExt;
@@ -91,7 +91,7 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                     (
                         psys_host::dialog::DialogType::Alert,
                         psys_host::dialog::DialogStyle::System,
-                    ) => show_system_alert(app_handle, info).await,
+                    ) => show_system_alert(app_handle, plugin_name, info).await,
                     (_, psys_host::dialog::DialogStyle::Website) => {
                         show_website_dialog(app_handle, plugin_name, dialog_type, info).await
                     }
@@ -276,8 +276,12 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
 
 async fn show_system_alert(
     app_handle: AppHandle,
+    plugin_name: String,
     info: psys_host::dialog::DialogInfo,
 ) -> Result<psys_host::dialog::DialogResult, Error> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let _ = &plugin_name;
+
     let title: String = info.title.into();
     let message: String = info.content.into();
     let mut buttons: Vec<ButtonSpec> = info.buttons.into_iter().map(ButtonSpec::from).collect();
@@ -301,19 +305,28 @@ async fn show_system_alert(
     let (button_config, mapping) = build_button_config(buttons);
     let (tx, rx) = oneshot::channel();
 
-    app_handle
+    #[allow(unused_mut)]
+    let mut builder = app_handle
         .dialog()
         .message(message)
         .title(title)
-        .buttons(button_config)
-        .show_with_result(move |result| {
-            let clicked_btn_id = resolve_dialog_result(result, &mapping);
-            let dialog_result = psys_host::dialog::DialogResult {
-                clicked_btn_id,
-                input_result: HostString::default(),
-            };
-            let _ = tx.send(dialog_result);
-        });
+        .buttons(button_config);
+
+    // 桌面端启用插件独立窗口时，把系统弹窗的父窗口指向该插件的独立窗口，
+    // 这样弹窗会在插件窗口而不是主窗口上弹出（与 website 样式的路由行为保持一致）。
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if let Some(parent) = plugin_alert_parent_window(&app_handle, &plugin_name) {
+        builder = builder.parent(&parent);
+    }
+
+    builder.show_with_result(move |result| {
+        let clicked_btn_id = resolve_dialog_result(result, &mapping);
+        let dialog_result = psys_host::dialog::DialogResult {
+            clicked_btn_id,
+            input_result: HostString::default(),
+        };
+        let _ = tx.send(dialog_result);
+    });
 
     match rx.await {
         Ok(result) => Ok(result),
@@ -322,6 +335,35 @@ async fn show_system_alert(
             Ok(default_dialog_result())
         }
     }
+}
+
+/// 查找指定插件的桌面独立窗口（若已打开）。窗口 label 必须与前端
+/// `buildPluginWindowLabel` 生成规则一致，否则无法命中。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn plugin_alert_parent_window(
+    app_handle: &AppHandle,
+    plugin_name: &str,
+) -> Option<tauri::WebviewWindow> {
+    app_handle.get_webview_window(&plugin_window_label(plugin_name))
+}
+
+/// 复刻前端 `web/src/logic/pluginWindow.ts` 的 `buildPluginWindowLabel`：
+/// 前缀 `plugin-window-`，把非 `[a-zA-Z0-9_-]` 的字符替换为 `_`，再截断到 48 个字符。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn plugin_window_label(plugin_name: &str) -> String {
+    const PLUGIN_WINDOW_LABEL_PREFIX: &str = "plugin-window-";
+    let sanitized: String = plugin_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(48)
+        .collect();
+    format!("{PLUGIN_WINDOW_LABEL_PREFIX}{sanitized}")
 }
 
 async fn show_website_dialog(
