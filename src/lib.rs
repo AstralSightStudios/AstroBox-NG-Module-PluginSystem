@@ -111,7 +111,7 @@ pub mod bindings_v3 {
             default: trappable
         },
         exports: {
-            default: async | store,
+            default: async,
         }
     });
 }
