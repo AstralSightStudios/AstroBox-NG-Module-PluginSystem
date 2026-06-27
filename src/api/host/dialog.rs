@@ -348,22 +348,19 @@ fn plugin_alert_parent_window(
 }
 
 /// 复刻前端 `web/src/logic/pluginWindow.ts` 的 `buildPluginWindowLabel`：
-/// 前缀 `plugin-window-`，把非 `[a-zA-Z0-9_-]` 的字符替换为 `_`，再截断到 48 个字符。
+/// 前缀 `plugin-window-` + 插件名 UTF-8 字节的 FNV-1a 64 位哈希（16 位小写十六进制）。
+/// 旧实现把中文等非 ASCII 字符统一替换为 `_` 再截断，会让不同插件（尤其同字数的纯中文
+/// 名字）塌缩成同一个 label 互相抢占窗口，故改用哈希保证唯一。两端算法必须严格一致。
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn plugin_window_label(plugin_name: &str) -> String {
     const PLUGIN_WINDOW_LABEL_PREFIX: &str = "plugin-window-";
-    let sanitized: String = plugin_name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .take(48)
-        .collect();
-    format!("{PLUGIN_WINDOW_LABEL_PREFIX}{sanitized}")
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in plugin_name.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(PRIME);
+    }
+    format!("{PLUGIN_WINDOW_LABEL_PREFIX}{hash:016x}")
 }
 
 async fn show_website_dialog(
