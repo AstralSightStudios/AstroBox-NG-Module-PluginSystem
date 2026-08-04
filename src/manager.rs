@@ -205,8 +205,8 @@ impl PluginManager {
                         plugin.stop().await;
                         emit_progress(name, "error", Some(err.to_string()));
                         Err(anyhow::anyhow!(
-                            "plugin '{}' on_load failed. detail: {}",
-                            name,
+                            "Failed to load plugin from {}: {}",
+                            plugin.path.to_string_lossy(),
                             err
                         ))
                     }
