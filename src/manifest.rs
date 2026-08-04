@@ -28,9 +28,27 @@ impl PluginManifest {
     pub const SUPPORTED_API_LEVELS: &'static [u32] = &[2, 3];
 
     pub fn validate(&self, manifest_path: &Path) -> Result<()> {
-        if self.name.trim().is_empty() {
+        // 统一用 trim 后的名字校验：Windows Win32 会规范化尾随点/空格，
+        // 未 trim 的 ".. " / "..." 可被解析成父目录导致安装期目录清除。
+        let name = self.name.trim();
+        if name.is_empty() {
             return Err(corelib::anyhow_site!(
                 "name is empty in manifest: {}",
+                manifest_path.display()
+            ));
+        }
+
+        if name == "."
+            || name == ".."
+            || name.ends_with('.')
+            || name.contains('/')
+            || name.contains('\\')
+            || name.contains(':')
+            || name.chars().any(|c| c < '\u{20}')
+        {
+            return Err(corelib::anyhow_site!(
+                "unsafe plugin name {:?} in manifest: {}",
+                self.name,
                 manifest_path.display()
             ));
         }
