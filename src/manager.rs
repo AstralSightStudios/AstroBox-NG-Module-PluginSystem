@@ -506,6 +506,22 @@ impl PluginManager {
         }
     }
 
+    pub async fn clear_disabled_flag_for_folder(&mut self, folder_name: &str) {
+        let name = self
+            .plugins
+            .values()
+            .find(|plugin| {
+                plugin
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    == Some(folder_name)
+            })
+            .map(|plugin| plugin.manifest.name.clone())
+            .unwrap_or_else(|| folder_name.to_string());
+        self.set_plugin_disabled_persisted(&name, false).await;
+    }
+
     pub async fn load_from_dir(&mut self) -> Result<Vec<String>> {
         fs::create_dir_all(&self.plugin_root)?;
         let mut errors = Vec::new();
