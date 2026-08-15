@@ -10,8 +10,6 @@ use wasmtime::component::{Accessor, FutureReader};
 
 use super::{HostString, PluginCtx, permission::check_permission_declared};
 
-const MIWEAR_INTERCONNECT_PROXY_PACKAGE: &str = "com.xiaomi.miwear.interconnect";
-
 impl psys_host::interconnect::Host for PluginCtx {}
 
 impl psys_host::interconnect::HostWithStore for PluginCtx {
@@ -88,17 +86,6 @@ async fn resolve_app_info(device_addr: &str, pkg_name: &str) -> Result<AppInfo, 
             .map(|item| AppInfo {
                 package_name: item.package_name.clone(),
                 fingerprint: item.fingerprint.clone(),
-            })
-            .or_else(|| {
-                // This package is the firmware-installed native interconnect
-                // proxy rather than an installed third-party quick app, so it
-                // is legitimately absent from ResourceComponent::quick_apps.
-                // SEND_PHONE_MESSAGE still routes it by package name; the
-                // proxy does not require a quick-app fingerprint.
-                (pkg_name == MIWEAR_INTERCONNECT_PROXY_PACKAGE).then(|| AppInfo {
-                    package_name: pkg_name.clone(),
-                    fingerprint: Vec::new(),
-                })
             })
             .ok_or_else(|| anyhow!("Quick app {} not found on {}", pkg_name, device_addr))
     })
