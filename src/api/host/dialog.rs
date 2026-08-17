@@ -61,6 +61,13 @@ static SAVE_FILE_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 static SAVE_FILE_SESSIONS: Lazy<StdMutex<HashMap<(String, u64), SaveFileSession>>> =
     Lazy::new(|| StdMutex::new(HashMap::new()));
 
+pub(crate) fn abort_save_file_sessions(plugin_name: &str) {
+    let mut sessions = SAVE_FILE_SESSIONS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    sessions.retain(|(owner, _), _| owner != plugin_name);
+}
+
 impl psys_host::dialog::Host for PluginCtx {
     fn open_url(&mut self, url: HostString) -> wasmtime::Result<()> {
         let app_handle = self.app_handle();

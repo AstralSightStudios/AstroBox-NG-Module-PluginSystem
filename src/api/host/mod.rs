@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use tauri::AppHandle;
 use wasmtime::component::ResourceTable;
+use wasmtime::{StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
@@ -20,6 +21,8 @@ pub struct PluginCtx {
     register_state: Arc<PluginRegisterState>,
     plugin_name: String,
     permissions: Arc<Vec<String>>,
+    runtime_generation: u64,
+    store_limits: StoreLimits,
 }
 
 impl PluginCtx {
@@ -30,6 +33,7 @@ impl PluginCtx {
         plugin_name: String,
         register_state: Arc<PluginRegisterState>,
         permissions: Arc<Vec<String>>,
+        runtime_generation: u64,
     ) -> Self {
         Self {
             table: ResourceTable::new(),
@@ -40,6 +44,14 @@ impl PluginCtx {
             register_state,
             plugin_name,
             permissions,
+            runtime_generation,
+            store_limits: StoreLimitsBuilder::new()
+                .memory_size(256 * 1024 * 1024)
+                .table_elements(100_000)
+                .instances(256)
+                .tables(256)
+                .memories(256)
+                .build(),
         }
     }
 
@@ -59,8 +71,16 @@ impl PluginCtx {
         &self.plugin_root
     }
 
+    pub(crate) fn runtime_generation(&self) -> u64 {
+        self.runtime_generation
+    }
+
     pub(crate) fn permissions(&self) -> Arc<Vec<String>> {
         Arc::clone(&self.permissions)
+    }
+
+    pub(crate) fn store_limits(&mut self) -> &mut StoreLimits {
+        &mut self.store_limits
     }
 }
 
@@ -89,7 +109,7 @@ impl wasmtime::component::HasData for PluginCtx {
 
 mod clipboard;
 mod device;
-mod dialog;
+pub(crate) mod dialog;
 mod event;
 mod i18n;
 mod interconnect;

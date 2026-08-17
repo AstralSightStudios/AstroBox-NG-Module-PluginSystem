@@ -7,6 +7,7 @@ impl psys_host::event::Host for PluginCtx {
         let event_name = event_name.to_string();
         let payload_raw = payload.to_string();
         let source_plugin = self.plugin_name().to_string();
+        let source_generation = self.runtime_generation();
 
         let message = serde_json::json!({
             "eventName": event_name.clone(),
@@ -29,13 +30,22 @@ impl psys_host::event::Host for PluginCtx {
                     let payload = dispatch_payload.clone();
                     let source_plugin = source_plugin.clone();
                     move |pm| {
-                        let active_plugins = pm
-                            .plugins
-                            .iter()
-                            .filter(|(_, plugin)| plugin.state.loaded && !plugin.state.disabled)
-                            .filter(|(name, _)| name.as_str() != source_plugin.as_str())
-                            .map(|(name, plugin)| (name.clone(), plugin.runtime.clone()))
-                            .collect::<Vec<_>>();
+                        let source_is_current =
+                            pm.plugins.get(&source_plugin).is_some_and(|plugin| {
+                                plugin.state.loaded
+                                    && !plugin.state.disabled
+                                    && plugin.runtime.is_generation_current(source_generation)
+                            });
+                        let active_plugins = if source_is_current {
+                            pm.plugins
+                                .iter()
+                                .filter(|(_, plugin)| plugin.state.loaded && !plugin.state.disabled)
+                                .filter(|(name, _)| name.as_str() != source_plugin.as_str())
+                                .map(|(name, plugin)| (name.clone(), plugin.runtime.clone()))
+                                .collect::<Vec<_>>()
+                        } else {
+                            Vec::new()
+                        };
                         let event_name = event_name.clone();
                         let payload = payload.clone();
                         Box::pin(async move {

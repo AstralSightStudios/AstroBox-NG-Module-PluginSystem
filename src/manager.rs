@@ -7,6 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, Emitter};
 use zip::ZipArchive;
@@ -14,13 +16,26 @@ use zip::ZipArchive;
 use crate::bindings::astrobox::psys_host;
 use crate::manifest::PluginManifest;
 use crate::plugin::{CardRegistration, Plugin, PluginData, purge_precompiled_component};
-use crate::{PLUGINSYSTEM_PROGRESS_EVENT, PluginSystemProgressPayload};
+use crate::{PLUGIN_LIST_CHANGED_EVENT, PLUGINSYSTEM_PROGRESS_EVENT, PluginSystemProgressPayload};
 
 pub struct PluginManager {
     plugin_root: PathBuf,
     app_handle: AppHandle,
     pub plugins: HashMap<String, Plugin>,
+    pending_plugins: HashMap<String, PathBuf>,
     pub updated: bool,
+    change_generation: AtomicU64,
+}
+
+#[derive(Debug, Serialize)]
+struct PluginChangedPayload<'a> {
+    name: &'a str,
+    action: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<&'a str>,
+    loaded: bool,
+    disabled: bool,
+    generation: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,6 +50,9 @@ pub struct RegisteredProviderDescriptor {
 const FRONT_STORAGE_GET_JSON_METHOD: &str = "host/storage/local/get_json";
 const FRONT_STORAGE_SET_JSON_METHOD: &str = "host/storage/local/set_json";
 const PLUGIN_DISABLED_STORAGE_KEY: &str = "astrobox.plugin.disabled_map";
+const MAX_PLUGIN_PACKAGE_BYTES: usize = 128 * 1024 * 1024;
+const MAX_PLUGIN_PACKAGE_FILES: usize = 2048;
+const MAX_PLUGIN_UNPACKED_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Serialize)]
 struct LocalStorageKeyPayload {
@@ -71,12 +89,62 @@ impl PluginManager {
         }
     }
 
+    fn emit_plugin_changed(
+        &self,
+        name: &str,
+        action: &str,
+        version: Option<&str>,
+        loaded: bool,
+        disabled: bool,
+    ) {
+        let generation = self.change_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let payload = PluginChangedPayload {
+            name,
+            action,
+            version,
+            loaded,
+            disabled,
+            generation,
+        };
+        if let Err(err) = self.app_handle.emit(PLUGIN_LIST_CHANGED_EVENT, &payload) {
+            log::error!("Failed to emit plugin changed event: {err}");
+        }
+    }
+
+    fn operation_token() -> String {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        format!("{}-{}", std::process::id(), timestamp)
+    }
+
+    fn staging_dir(&self, name: &str) -> PathBuf {
+        let root = self
+            .plugin_root
+            .parent()
+            .unwrap_or(self.plugin_root.as_path())
+            .join(".astrobox-plugin-staging");
+        root.join(format!("{}-{}", name, Self::operation_token()))
+    }
+
+    fn backup_dir(&self, name: &str) -> PathBuf {
+        let root = self
+            .plugin_root
+            .parent()
+            .unwrap_or(self.plugin_root.as_path())
+            .join(".astrobox-plugin-backup");
+        root.join(format!("{}-{}", name, Self::operation_token()))
+    }
+
     pub fn new(root: PathBuf, app_handle: AppHandle) -> Self {
         Self {
             plugin_root: root,
             app_handle,
             plugins: HashMap::new(),
+            pending_plugins: HashMap::new(),
             updated: false,
+            change_generation: AtomicU64::new(0),
         }
     }
 
@@ -222,96 +290,409 @@ impl PluginManager {
         result
     }
 
-    pub async fn add_from_dir(&mut self, _name: &str, path: &Path) -> Result<()> {
+    fn create_staging_dir(&self, name: &str) -> Result<PathBuf> {
+        let staging_dir = self.staging_dir(name);
+        if let Some(parent) = staging_dir.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if staging_dir.exists() {
+            fs::remove_dir_all(&staging_dir)?;
+        }
+        fs::create_dir_all(&staging_dir)?;
+        Ok(staging_dir)
+    }
+
+    fn recover_auxiliary_dirs(&self) -> Result<()> {
+        let staging_root = self
+            .plugin_root
+            .parent()
+            .unwrap_or(self.plugin_root.as_path())
+            .join(".astrobox-plugin-staging");
+        if staging_root.exists() {
+            fs::remove_dir_all(&staging_root)?;
+        }
+
+        let backup_root = self
+            .plugin_root
+            .parent()
+            .unwrap_or(self.plugin_root.as_path())
+            .join(".astrobox-plugin-backup");
+        if !backup_root.is_dir() {
+            return Ok(());
+        }
+
+        fs::create_dir_all(&self.plugin_root)?;
+        for entry in fs::read_dir(&backup_root)? {
+            let backup = entry?.path();
+            if !backup.is_dir() {
+                let _ = fs::remove_file(backup);
+                continue;
+            }
+
+            let Some(manifest) = PluginManifest::load_from_dir(&backup).ok() else {
+                let _ = fs::remove_dir_all(backup);
+                continue;
+            };
+            let destination = self.plugin_root.join(&manifest.name);
+            if destination.exists() {
+                let _ = fs::remove_dir_all(backup);
+            } else if let Err(err) = fs::rename(&backup, &destination) {
+                log::warn!(
+                    "[pluginsystem] failed to restore interrupted plugin update {} -> {}: {err}",
+                    backup.display(),
+                    destination.display()
+                );
+            }
+        }
+
+        let _ = fs::remove_dir(&backup_root);
+        Ok(())
+    }
+
+    async fn rollback_plugin_swap(
+        &mut self,
+        name: &str,
+        destination: &Path,
+        staging_dir: &Path,
+        backup_dir: &Path,
+        had_destination: bool,
+        previous_state: Option<(bool, bool)>,
+    ) -> Result<()> {
+        if destination.exists() {
+            if let Ok(manifest) = PluginManifest::load_from_dir(destination) {
+                let _ = purge_precompiled_component(destination, &manifest);
+            }
+            fs::remove_dir_all(destination).with_context(|| {
+                format!(
+                    "failed to remove failed plugin replacement {}",
+                    destination.display()
+                )
+            })?;
+        }
+
+        if had_destination && backup_dir.exists() {
+            fs::rename(backup_dir, destination).with_context(|| {
+                format!(
+                    "failed to restore plugin backup {} to {}",
+                    backup_dir.display(),
+                    destination.display()
+                )
+            })?;
+        }
+
+        if staging_dir.exists() {
+            let _ = fs::remove_dir_all(staging_dir);
+        }
+
+        let Some((was_loaded, was_disabled)) = previous_state else {
+            return Ok(());
+        };
+        if !destination.is_dir() {
+            return Err(anyhow!(
+                "plugin '{}' rollback has no restorable destination",
+                name
+            ));
+        }
+
+        let mut restored = Plugin::load(destination.to_path_buf(), self.app_handle.clone())
+            .with_context(|| format!("failed to reload plugin '{}' during rollback", name))?;
+        if was_loaded && !was_disabled {
+            restored
+                .run()
+                .await
+                .with_context(|| format!("failed to restart plugin '{}' during rollback", name))?;
+        } else {
+            restored.state.disabled = was_disabled;
+            restored.state.loaded = false;
+        }
+        self.plugins.insert(name.to_string(), restored);
+        Ok(())
+    }
+
+    fn schedule_plugin_activation(&mut self, name: String, staging_dir: PathBuf) {
         self.updated = true;
+        if let Some(previous) = self
+            .pending_plugins
+            .insert(name.clone(), staging_dir.clone())
+        {
+            let _ = fs::remove_dir_all(previous);
+        }
+        self.emit_progress(&name, "queued", None);
+
+        let prepare_path = staging_dir.clone();
+        let app_handle = self.app_handle.clone();
+        tokio::spawn(async move {
+            let prepared =
+                tokio::task::spawn_blocking(move || Plugin::load(prepare_path, app_handle)).await;
+            let result = crate::with_plugin_manager_async(move |pm| {
+                Box::pin(async move {
+                    match prepared {
+                        Ok(Ok(plugin)) => pm.activate_prepared_plugin(staging_dir, plugin).await,
+                        Ok(Err(err)) => pm.fail_pending_activation(name, staging_dir, err).await,
+                        Err(err) => {
+                            pm.fail_pending_activation(
+                                name,
+                                staging_dir,
+                                anyhow!("plugin preparation task failed: {err}"),
+                            )
+                            .await
+                        }
+                    }
+                })
+            })
+            .await;
+            if let Err(err) = result {
+                log::error!("[pluginsystem] background plugin activation failed: {err}");
+            }
+        });
+    }
+
+    async fn fail_pending_activation(
+        &mut self,
+        name: String,
+        staging_dir: PathBuf,
+        error: anyhow::Error,
+    ) -> Result<()> {
+        let is_current = self
+            .pending_plugins
+            .get(&name)
+            .is_some_and(|pending| pending == &staging_dir);
+        if !is_current {
+            return Ok(());
+        }
+        self.pending_plugins.remove(&name);
+        let _ = fs::remove_dir_all(&staging_dir);
+        log::error!("[plugin:{}] background activation failed: {error}", name);
+        self.emit_current_plugin_state(&name, "rollback");
+        Ok(())
+    }
+
+    async fn activate_prepared_plugin(
+        &mut self,
+        staging_dir: PathBuf,
+        mut new_plugin: Plugin,
+    ) -> Result<()> {
+        let name = new_plugin.manifest.name.clone();
+        let is_current = self
+            .pending_plugins
+            .get(&name)
+            .is_some_and(|pending| pending == &staging_dir);
+        if !is_current {
+            drop(new_plugin);
+            return Ok(());
+        }
+        self.pending_plugins.remove(&name);
+
+        let destination = self.plugin_root.join(&name);
+        fs::create_dir_all(&self.plugin_root)?;
+        let previous_state = self
+            .plugins
+            .get(&name)
+            .map(|plugin| (plugin.state.loaded, plugin.state.disabled));
+        let mut old_plugin = self.plugins.remove(&name);
+        if let Some(plugin) = old_plugin.as_mut() {
+            plugin.stop().await;
+        }
+
+        let had_destination = destination.exists();
+        let backup_dir = self.backup_dir(&name);
+        if had_destination {
+            if let Some(parent) = backup_dir.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            if backup_dir.exists() {
+                fs::remove_dir_all(&backup_dir)?;
+            }
+            if let Err(err) = fs::rename(&destination, &backup_dir) {
+                if let Some(plugin) = old_plugin {
+                    self.plugins.insert(name.clone(), plugin);
+                }
+                return Err(err).with_context(|| {
+                    format!(
+                        "failed to backup plugin directory {} to {}",
+                        destination.display(),
+                        backup_dir.display()
+                    )
+                });
+            }
+        }
+        // Drop the old Component only after the backup succeeds, so a failed
+        // backup can restore the exact old Plugin without reloading it.
+        drop(old_plugin);
+
+        if let Err(err) = fs::rename(&staging_dir, &destination) {
+            drop(new_plugin);
+            let rollback = self
+                .rollback_plugin_swap(
+                    &name,
+                    &destination,
+                    &staging_dir,
+                    &backup_dir,
+                    had_destination,
+                    previous_state,
+                )
+                .await;
+            return match rollback {
+                Ok(()) => {
+                    self.emit_current_plugin_state(&name, "rollback");
+                    Err(anyhow!("failed to activate plugin '{}': {err}", name))
+                }
+                Err(rollback_err) => Err(anyhow!(
+                    "failed to activate plugin '{}': {}; rollback failed: {}",
+                    name,
+                    err,
+                    rollback_err
+                )),
+            };
+        }
+
+        new_plugin.relocate(destination.clone());
+        let should_start = previous_state
+            .map(|(was_loaded, was_disabled)| was_loaded && !was_disabled)
+            .unwrap_or(true);
+        let should_remain_disabled = previous_state
+            .map(|(_, was_disabled)| was_disabled)
+            .unwrap_or(false);
+
+        if should_start {
+            if let Err(err) = new_plugin.run().await {
+                new_plugin.stop().await;
+                drop(new_plugin);
+                let rollback = self
+                    .rollback_plugin_swap(
+                        &name,
+                        &destination,
+                        &staging_dir,
+                        &backup_dir,
+                        had_destination,
+                        previous_state,
+                    )
+                    .await;
+                return match rollback {
+                    Ok(()) => {
+                        self.emit_current_plugin_state(&name, "rollback");
+                        Err(anyhow!("failed to start plugin '{}': {}", name, err))
+                    }
+                    Err(rollback_err) => Err(anyhow!(
+                        "failed to start plugin '{}': {}; rollback failed: {}",
+                        name,
+                        err,
+                        rollback_err
+                    )),
+                };
+            }
+        } else {
+            new_plugin.state.disabled = should_remain_disabled;
+            new_plugin.state.loaded = false;
+        }
+
+        let action = if previous_state.is_some() || had_destination {
+            "updated"
+        } else {
+            "installed"
+        };
+        self.plugins.insert(name.clone(), new_plugin);
+
+        if backup_dir.exists() {
+            if let Err(err) = fs::remove_dir_all(&backup_dir) {
+                log::warn!(
+                    "[plugin:{}] failed to remove old plugin backup {}: {err}",
+                    name,
+                    backup_dir.display()
+                );
+            }
+        }
+        if action == "installed" {
+            self.set_plugin_disabled_persisted(&name, false).await;
+        }
+        self.emit_current_plugin_state(&name, action);
+        Ok(())
+    }
+
+    fn emit_current_plugin_state(&self, name: &str, action: &str) {
+        if let Some(plugin) = self.plugins.get(name) {
+            self.emit_plugin_changed(
+                name,
+                action,
+                Some(plugin.manifest.version.as_str()),
+                plugin.state.loaded,
+                plugin.state.disabled,
+            );
+        } else {
+            self.emit_plugin_changed(name, action, None, false, true);
+        }
+    }
+
+    pub async fn add_from_dir(&mut self, _name: &str, path: &Path) -> Result<()> {
         if !path.is_dir() {
             return Err(anyhow!("source path is not a directory"));
         }
         let manifest = PluginManifest::load_from_dir(path)?;
-        self.unload_plugin_for_overwrite(manifest.name.as_str())
-            .await;
-        let dest_dir = self.plugin_root.join(manifest.name.as_str());
-        if dest_dir.exists() {
-            fs::remove_dir_all(&dest_dir)?;
+        let staging_dir = self.create_staging_dir(&manifest.name)?;
+        if let Err(err) = copy_dir_recursive(path, &staging_dir) {
+            let _ = fs::remove_dir_all(&staging_dir);
+            return Err(err);
         }
-        copy_dir_recursive(path, &dest_dir)?;
+        self.schedule_plugin_activation(manifest.name, staging_dir);
         Ok(())
     }
 
     pub async fn add_from_abp(&mut self, _name: &str, path: &Path) -> Result<()> {
-        self.updated = true;
         let package_raw = tokio::fs::read(path).await?;
+        if package_raw.len() > MAX_PLUGIN_PACKAGE_BYTES {
+            return Err(anyhow!(
+                "plugin package is too large: {} bytes (limit {} bytes)",
+                package_raw.len(),
+                MAX_PLUGIN_PACKAGE_BYTES
+            ));
+        }
         let manifest = resolve_manifest_from_abp(&package_raw)?;
-
-        self.unload_plugin_for_overwrite(manifest.name.as_str())
-            .await;
-        let dest_dir = self.plugin_root.join(manifest.name.as_str());
-        if dest_dir.exists() {
-            fs::remove_dir_all(&dest_dir)?;
+        let staging_dir = self.create_staging_dir(&manifest.name)?;
+        if let Err(err) = extract_abp_to_dir(&package_raw, &staging_dir) {
+            let _ = fs::remove_dir_all(&staging_dir);
+            return Err(err);
         }
-        fs::create_dir_all(&dest_dir)?;
-
-        let reader = Cursor::new(package_raw);
-        let mut archive = ZipArchive::new(reader)?;
-
-        for i in 0..archive.len() {
-            let mut file = archive.by_index(i)?;
-            let outpath = dest_dir.join(file.mangled_name());
-
-            if file.name().ends_with('/') {
-                fs::create_dir_all(&outpath)?;
-            } else {
-                if let Some(parent) = outpath.parent() {
-                    if !parent.exists() {
-                        fs::create_dir_all(parent)?;
-                    }
-                }
-                let mut outfile = File::create(&outpath)?;
-                std::io::copy(&mut file, &mut outfile)?;
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Some(mode) = file.unix_mode() {
-                    fs::set_permissions(&outpath, fs::Permissions::from_mode(mode))?;
-                }
-            }
-        }
-
-        /*
-        self.add(&dest_dir).await?;
-        self.set_plugin_disabled_persisted(name, false).await;
-        self.start_plugin(name).await?;
-        */
-
+        self.schedule_plugin_activation(manifest.name, staging_dir);
         Ok(())
     }
 
     pub async fn enable(&mut self, name: &String) -> bool {
         log::info!("[plugin:{}] Enable requested", name);
         self.updated = true;
+        let mut changed = false;
         if let Some(plugin) = self.plugins.get_mut(name) {
             if plugin.state.loaded && !plugin.state.disabled {
                 log::info!("[plugin:{}] Already enabled", name);
-                self.set_plugin_disabled_persisted(name, false).await;
-                return true;
-            }
+                changed = true;
+            } else {
+                plugin.state.disabled = false;
 
-            plugin.state.disabled = false;
-
-            match plugin.run().await {
-                Ok(()) => {
-                    log::info!("Enable successful");
-                    self.set_plugin_disabled_persisted(name, false).await;
-                    return true;
-                }
-                Err(err) => {
-                    log::error!("[plugin:{}] Failed to start: {err}", name);
-                    plugin.stop().await;
+                match plugin.run().await {
+                    Ok(()) => {
+                        log::info!("Enable successful");
+                        changed = true;
+                    }
+                    Err(err) => {
+                        log::error!("[plugin:{}] Failed to start: {err}", name);
+                        plugin.stop().await;
+                    }
                 }
             }
         }
 
+        if changed {
+            self.set_plugin_disabled_persisted(name, false).await;
+            if let Some(plugin) = self.plugins.get(name) {
+                self.emit_plugin_changed(
+                    name,
+                    "enabled",
+                    Some(plugin.manifest.version.as_str()),
+                    plugin.state.loaded,
+                    plugin.state.disabled,
+                );
+            }
+            return true;
+        }
         false
     }
 
@@ -325,23 +706,6 @@ impl PluginManager {
                 Some((plugin.path, plugin.manifest))
             }
             None => None,
-        }
-    }
-
-    async fn unload_plugin_for_overwrite(&mut self, plugin_name: &str) {
-        let Some((plugin_path, plugin_manifest)) = self.take_plugin_for_cleanup(plugin_name).await
-        else {
-            return;
-        };
-        log::info!(
-            "[plugin:{}] Active during install, stopping runtime before overwrite",
-            plugin_name
-        );
-        if let Err(err) = purge_precompiled_component(&plugin_path, &plugin_manifest) {
-            log::warn!(
-                "[plugin:{}] Failed to purge precompiled artifacts before overwrite: {err}",
-                plugin_name
-            );
         }
     }
 
@@ -466,21 +830,47 @@ impl PluginManager {
     pub async fn disable(&mut self, name: &String) -> bool {
         log::info!("[plugin:{}] Disable requested", name);
         self.updated = true;
-        match self.plugins.get_mut(name) {
-            Some(plug) => {
-                plug.stop().await;
-                log::info!("Disable successful");
-                self.set_plugin_disabled_persisted(name, true).await;
-                true
+        let changed = if let Some(plugin) = self.plugins.get_mut(name) {
+            plugin.stop().await;
+            log::info!("Disable successful");
+            true
+        } else {
+            false
+        };
+
+        if changed {
+            self.set_plugin_disabled_persisted(name, true).await;
+            if let Some(plugin) = self.plugins.get(name) {
+                self.emit_plugin_changed(
+                    name,
+                    "disabled",
+                    Some(plugin.manifest.version.as_str()),
+                    plugin.state.loaded,
+                    plugin.state.disabled,
+                );
             }
-            None => false,
+            true
+        } else {
+            false
         }
     }
 
     pub async fn remove(&mut self, name: &String) -> bool {
         self.updated = true;
+        let cancelled_pending = self
+            .pending_plugins
+            .remove(name)
+            .map(|staging_dir| {
+                let _ = fs::remove_dir_all(staging_dir);
+            })
+            .is_some();
         let (plugin_path, plugin_manifest) = match self.take_plugin_for_cleanup(name).await {
             Some(plugin) => plugin,
+            None if cancelled_pending => {
+                self.set_plugin_disabled_persisted(name, false).await;
+                self.emit_plugin_changed(name, "removed", None, false, true);
+                return true;
+            }
             None => {
                 log::error!("[plugin:{}] Not found", name);
                 return false;
@@ -497,6 +887,13 @@ impl PluginManager {
         match fs::remove_dir_all(&plugin_path) {
             Ok(_) => {
                 self.set_plugin_disabled_persisted(name, false).await;
+                self.emit_plugin_changed(
+                    name,
+                    "removed",
+                    Some(plugin_manifest.version.as_str()),
+                    false,
+                    true,
+                );
                 true
             }
             Err(e) => {
@@ -510,13 +907,7 @@ impl PluginManager {
         let name = self
             .plugins
             .values()
-            .find(|plugin| {
-                plugin
-                    .path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    == Some(folder_name)
-            })
+            .find(|plugin| plugin.path.file_name().and_then(|n| n.to_str()) == Some(folder_name))
             .map(|plugin| plugin.manifest.name.clone())
             .unwrap_or_else(|| folder_name.to_string());
         self.set_plugin_disabled_persisted(&name, false).await;
@@ -524,6 +915,7 @@ impl PluginManager {
 
     pub async fn load_from_dir(&mut self) -> Result<Vec<String>> {
         fs::create_dir_all(&self.plugin_root)?;
+        self.recover_auxiliary_dirs()?;
         let mut errors = Vec::new();
 
         for entry in fs::read_dir(&self.plugin_root)? {
@@ -695,6 +1087,66 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
             fs::copy(&entry_path, &target_path)?;
         }
     }
+    Ok(())
+}
+
+fn extract_abp_to_dir(package_raw: &[u8], destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination)?;
+    let reader = Cursor::new(package_raw);
+    let mut archive = ZipArchive::new(reader)?;
+    if archive.len() > MAX_PLUGIN_PACKAGE_FILES {
+        return Err(anyhow!(
+            "plugin package contains too many files: {} (limit {})",
+            archive.len(),
+            MAX_PLUGIN_PACKAGE_FILES
+        ));
+    }
+    let mut seen_paths = HashSet::new();
+    let mut unpacked_bytes = 0u64;
+
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let relative_path = file.mangled_name();
+        let outpath = destination.join(&relative_path);
+        if !outpath.starts_with(destination) {
+            return Err(anyhow!(
+                "plugin package contains an unsafe path: {}",
+                file.name()
+            ));
+        }
+        if !seen_paths.insert(outpath.clone()) {
+            return Err(anyhow!(
+                "plugin package contains a duplicate path: {}",
+                file.name()
+            ));
+        }
+        unpacked_bytes = unpacked_bytes.saturating_add(file.size());
+        if unpacked_bytes > MAX_PLUGIN_UNPACKED_BYTES {
+            return Err(anyhow!(
+                "plugin package expands beyond the limit of {} bytes",
+                MAX_PLUGIN_UNPACKED_BYTES
+            ));
+        }
+
+        if file.name().ends_with('/') {
+            fs::create_dir_all(&outpath)?;
+        } else {
+            if let Some(parent) = outpath.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut outfile = File::create(&outpath)?;
+            std::io::copy(&mut file, &mut outfile)?;
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Some(mode) = file.unix_mode() {
+                fs::set_permissions(&outpath, fs::Permissions::from_mode(mode))?;
+            }
+        }
+    }
+
     Ok(())
 }
 

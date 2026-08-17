@@ -143,6 +143,7 @@ impl psys_host::transport::HostWithStore for PluginCtx {
         let instance = accessor.instance();
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let generation = accessor.with(|mut access| access.get().runtime_generation());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {
@@ -150,7 +151,7 @@ impl psys_host::transport::HostWithStore for PluginCtx {
                 let data = data.as_slice().to_vec();
                 let device_name = resolve_device_name(&device_addr).await;
                 let params = json!({
-                    "plugin": plugin_name,
+                    "plugin": plugin_name.as_str(),
                     "addr": device_addr.clone(),
                     "deviceName": device_name,
                 });
@@ -173,12 +174,21 @@ impl psys_host::transport::HostWithStore for PluginCtx {
                 };
                 let protobuf_type_id = u32::try_from(packet.r#type).ok();
                 let protobuf_packet_id = Some(packet.id);
-                let rx = transport_runtime::register_request_waiter(
+                let Some(rx) = transport_runtime::register_request_waiter(
+                    plugin_name.as_str(),
+                    generation,
                     device_addr.clone(),
                     L2Channel::Pb as u32,
                     protobuf_type_id,
                     protobuf_packet_id,
-                );
+                ) else {
+                    log::debug!(
+                        "[pluginsystem] transport.request rejected for stale response quarantine: plugin={}, generation={}",
+                        plugin_name,
+                        generation
+                    );
+                    return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(()));
+                };
 
                 if send_xiaomi_pb_packet(&device_addr, packet).await.is_err() {
                     return Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Err(()));

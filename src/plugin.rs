@@ -5,10 +5,12 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{
-    Arc, Mutex as StdMutex,
+    Arc, Mutex as StdMutex, OnceLock, Weak,
     atomic::{AtomicU64, Ordering},
 };
 use std::task::{Context as TaskContext, Poll};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use corelib::device::xiaomi::packet::v2::layer2::L2Channel;
@@ -29,6 +31,49 @@ use crate::bindings::{PsysWorld, astrobox::psys_host, exports::astrobox::psys_pl
 use crate::bindings_v3::{PsysWorldV3, exports::astrobox::psys_plugin::event_v3 as psys_plugin_v3};
 use crate::manifest::PluginManifest;
 use crate::{PLUGINSYSTEM_PROGRESS_EVENT, PluginSystemProgressPayload};
+
+const PLUGIN_EPOCH_TICKS_PER_CALL: u64 = 300;
+const PLUGIN_EPOCH_TICK_INTERVAL: Duration = Duration::from_millis(100);
+// A generation is global rather than per plugin name, so an old runtime can
+// never be mistaken for a replacement runtime after a hot reload.
+static NEXT_PLUGIN_GENERATION: AtomicU64 = AtomicU64::new(1);
+type EpochEngineEntry = (Engine, Weak<()>);
+
+static EPOCH_ENGINE_REGISTRY: OnceLock<StdMutex<Vec<EpochEngineEntry>>> = OnceLock::new();
+static EPOCH_TICKER_STARTED: OnceLock<()> = OnceLock::new();
+
+fn epoch_engine_registry() -> &'static StdMutex<Vec<EpochEngineEntry>> {
+    EPOCH_ENGINE_REGISTRY.get_or_init(|| StdMutex::new(Vec::new()))
+}
+
+fn register_epoch_engine(engine: &Engine) -> Arc<()> {
+    let owner = Arc::new(());
+    epoch_engine_registry()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .push((engine.clone(), Arc::downgrade(&owner)));
+
+    EPOCH_TICKER_STARTED.get_or_init(|| {
+        thread::spawn(|| {
+            loop {
+                thread::sleep(PLUGIN_EPOCH_TICK_INTERVAL);
+                let mut entries = epoch_engine_registry()
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                entries.retain(|(engine, owner)| {
+                    if owner.strong_count() == 0 {
+                        false
+                    } else {
+                        engine.increment_epoch();
+                        true
+                    }
+                });
+            }
+        });
+    });
+
+    owner
+}
 
 pub struct PluginState {
     pub disabled: bool,
@@ -557,7 +602,8 @@ fn create_engine() -> Result<Engine> {
         .wasm_memory64(false)
         .wasm_component_model(true)
         .wasm_component_model_async(true)
-        .async_support(true);
+        .async_support(true)
+        .epoch_interruption(true);
 
     Engine::new(&config).context("Failed to initialize the Wasmtime engine")
 }
@@ -588,6 +634,8 @@ pub struct PluginRuntime {
     app_handle: AppHandle,
     register_state: Arc<PluginRegisterState>,
     permissions: Arc<Vec<String>>,
+    generation: Arc<AtomicU64>,
+    _epoch_owner: Arc<()>,
     instance: Arc<Mutex<Option<PluginInstance>>>,
 }
 
@@ -650,6 +698,10 @@ impl PluginRuntime {
         emit_pluginsystem_progress(&self.app_handle, &self.name, stage, detail);
     }
 
+    fn refresh_epoch_deadline(store: &mut Store<PluginCtx>) {
+        store.set_epoch_deadline(PLUGIN_EPOCH_TICKS_PER_CALL);
+    }
+
     pub fn initialise(
         path: &Path,
         manifest: &PluginManifest,
@@ -690,6 +742,7 @@ impl PluginRuntime {
             })?
         };
 
+        let epoch_owner = register_epoch_engine(&engine);
         Ok(Self {
             name: plugin_name,
             api_level: manifest.api_level,
@@ -699,6 +752,8 @@ impl PluginRuntime {
             app_handle,
             register_state: Arc::new(PluginRegisterState::new()),
             permissions: Arc::new(Self::normalize_permissions(&manifest.permissions)),
+            generation: Arc::new(AtomicU64::new(0)),
+            _epoch_owner: epoch_owner,
             instance: Arc::new(Mutex::new(None)),
         })
     }
@@ -720,9 +775,9 @@ impl PluginRuntime {
         Ok(builder.build())
     }
 
-    fn create_store(&self) -> Result<Store<PluginCtx>> {
+    fn create_store(&self, generation: u64) -> Result<Store<PluginCtx>> {
         let wasi_ctx = self.build_wasi_ctx()?;
-        Ok(Store::new(
+        let mut store = Store::new(
             &self.engine,
             PluginCtx::new(
                 wasi_ctx,
@@ -731,8 +786,12 @@ impl PluginRuntime {
                 self.name.clone(),
                 Arc::clone(&self.register_state),
                 Arc::clone(&self.permissions),
+                generation,
             ),
-        ))
+        );
+        store.limiter(|ctx| ctx.store_limits());
+        store.set_epoch_deadline(PLUGIN_EPOCH_TICKS_PER_CALL);
+        Ok(store)
     }
 
     fn build_linker(&self) -> Result<Linker<PluginCtx>> {
@@ -750,10 +809,12 @@ impl PluginRuntime {
     }
 
     pub async fn run(&self) -> Result<()> {
+        let generation = NEXT_PLUGIN_GENERATION.fetch_add(1, Ordering::Relaxed);
+        self.generation.store(generation, Ordering::Release);
         self.register_state.reset_runtime_state().await;
         log::info!("[plugin:{}] Creating store...", self.name.clone());
         self.emit_progress("create_store", None);
-        let mut store = self.create_store()?;
+        let mut store = self.create_store(generation)?;
         log::info!("[plugin:{}] Building linker...", self.name.clone());
         self.emit_progress("build_linker", None);
         let linker = self.build_linker()?;
@@ -778,6 +839,7 @@ impl PluginRuntime {
             log::info!("[plugin:{}] Calling on_load...", self.name.clone());
             self.emit_progress("on_load", None);
             let lifecycle = instance.astrobox_psys_plugin_lifecycle();
+            Self::refresh_epoch_deadline(&mut store);
             lifecycle
                 .call_on_load(&mut store)
                 .await
@@ -803,6 +865,7 @@ impl PluginRuntime {
         log::info!("[plugin:{}] Calling on_load...", self.name.clone());
         self.emit_progress("on_load", None);
         let lifecycle = instance.astrobox_psys_plugin_lifecycle();
+        Self::refresh_epoch_deadline(&mut store);
         lifecycle
             .call_on_load(&mut store)
             .await
@@ -902,6 +965,7 @@ impl PluginRuntime {
         match instance {
             PluginInstance::V2 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event();
+                Self::refresh_epoch_deadline(&mut *store);
                 let future = event_iface
                     .call_on_event(&mut *store, event_type, payload.as_str())
                     .await
@@ -915,6 +979,7 @@ impl PluginRuntime {
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
+                Self::refresh_epoch_deadline(&mut *store);
                 let future = event_iface
                     .call_on_event(
                         &mut *store,
@@ -966,6 +1031,7 @@ impl PluginRuntime {
         match instance {
             PluginInstance::V2 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event();
+                Self::refresh_epoch_deadline(&mut *store);
                 let future = event_iface
                     .call_on_ui_render(&mut *store, element_id.as_str())
                     .await
@@ -979,6 +1045,7 @@ impl PluginRuntime {
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
+                Self::refresh_epoch_deadline(&mut *store);
                 let future = event_iface
                     .call_on_ui_render(&mut *store, element_id.as_str())
                     .await
@@ -1004,6 +1071,7 @@ impl PluginRuntime {
         match instance {
             PluginInstance::V2 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event();
+                Self::refresh_epoch_deadline(&mut *store);
                 let future = event_iface
                     .call_on_card_render(&mut *store, element_id.as_str())
                     .await
@@ -1017,6 +1085,7 @@ impl PluginRuntime {
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
+                Self::refresh_epoch_deadline(&mut *store);
                 let future = event_iface
                     .call_on_card_render(&mut *store, element_id.as_str())
                     .await
@@ -1051,6 +1120,7 @@ impl PluginRuntime {
             ));
         };
         let event_iface = world.astrobox_psys_plugin_event();
+        Self::refresh_epoch_deadline(&mut *store);
         let future = event_iface
             .call_on_ui_event(&mut *store, event_id.as_str(), event, payload.as_str())
             .await
@@ -1083,6 +1153,7 @@ impl PluginRuntime {
             ));
         };
         let event_iface = world.astrobox_psys_plugin_event_v3();
+        Self::refresh_epoch_deadline(&mut *store);
         let future = event_iface
             .call_on_ui_event_v3(&mut *store, event_id.as_str(), event, payload.as_str())
             .await
@@ -1196,7 +1267,24 @@ impl PluginRuntime {
         self.register_state.list_providers().await
     }
 
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    pub fn is_generation_current(&self, generation: u64) -> bool {
+        self.generation() == generation
+    }
+
     pub async fn clear_instance(&self) {
+        let providers = self.register_state.list_providers().await;
+        for provider in providers {
+            crate::provider_action_bridge::cancel_pending_provider_actions_for_provider(
+                &provider.name,
+            );
+        }
+        crate::transport_runtime::cancel_request_waiters(&self.name, self.generation());
+        crate::api::host::dialog::abort_save_file_sessions(&self.name);
+
         let mut guard = self.instance.lock().await;
         *guard = None;
         drop(guard);
@@ -1236,6 +1324,11 @@ impl Plugin {
             data: PluginData::default(),
             state: PluginState::default(),
         })
+    }
+
+    pub fn relocate(&mut self, path: PathBuf) {
+        self.path = path.clone();
+        self.runtime.plugin_root = path;
     }
 
     pub async fn run(&mut self) -> Result<()> {

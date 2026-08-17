@@ -123,6 +123,9 @@ mod transport_runtime;
 
 pub const PLUGINSYSTEM_READY_EVENT: &str = "astrobox://pluginsystem/ready";
 pub const PLUGINSYSTEM_PROGRESS_EVENT: &str = "astrobox://pluginsystem/progress";
+// Shared with the frontend so every WebView can refresh its plugin list and
+// rerender an active plugin after a runtime replacement.
+pub const PLUGIN_LIST_CHANGED_EVENT: &str = "astrobox:plugin-list-changed";
 
 #[derive(Debug, Serialize, Clone)]
 struct PluginSystemReadyPayload {

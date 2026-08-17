@@ -83,3 +83,12 @@ pub fn cancel_pending_provider_action(request_id: &str) -> bool {
         .remove(request_id)
         .is_some()
 }
+
+pub fn cancel_pending_provider_actions_for_provider(provider: &str) -> usize {
+    let mut guard = pending_provider_actions()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let before = guard.len();
+    guard.retain(|request_id, _| !request_id.starts_with(&format!("provider-action:{provider}:")));
+    before.saturating_sub(guard.len())
+}

@@ -29,7 +29,12 @@ fn build_timer_payload(timer_id: u64, kind: TimerKind, payload: String) -> Strin
     .to_string()
 }
 
-async fn dispatch_timer_event(plugin_name: String, timer_id: u64, payload: String) {
+async fn dispatch_timer_event(
+    plugin_name: String,
+    generation: u64,
+    timer_id: u64,
+    payload: String,
+) {
     let result = crate::with_plugin_manager_async({
         let plugin_name = plugin_name.clone();
         let payload = payload.clone();
@@ -38,6 +43,15 @@ async fn dispatch_timer_event(plugin_name: String, timer_id: u64, payload: Strin
             let payload = payload.clone();
             Box::pin(async move {
                 if let Some(plugin) = pm.plugins.get(&plugin_name) {
+                    if !plugin.runtime.is_generation_current(generation) {
+                        log::debug!(
+                            "Timer {} from stale plugin generation {} ignored for {}",
+                            timer_id,
+                            generation,
+                            plugin_name
+                        );
+                        return;
+                    }
                     if plugin.state.disabled || !plugin.state.loaded {
                         log::debug!(
                             "Timer {} fired for inactive plugin {}",
@@ -89,6 +103,7 @@ impl psys_host::timer::HostWithStore for PluginCtx {
     ) -> impl core::future::Future<Output = FutureReader<u64>> + Send {
         let instance = accessor.instance();
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let generation = accessor.with(|mut access| access.get().runtime_generation());
         let register_state = accessor.with(|mut access| access.get().register_state());
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {
@@ -101,7 +116,7 @@ impl psys_host::timer::HostWithStore for PluginCtx {
                     let delay_ms = delay_ms.max(1);
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                     let timer_payload = build_timer_payload(timer_id, TimerKind::Timeout, payload);
-                    dispatch_timer_event(plugin_name, timer_id, timer_payload).await;
+                    dispatch_timer_event(plugin_name, generation, timer_id, timer_payload).await;
                     timer_state.remove_timer(timer_id);
                 });
                 register_state.insert_timer(timer_id, handle);
@@ -118,6 +133,7 @@ impl psys_host::timer::HostWithStore for PluginCtx {
     ) -> impl core::future::Future<Output = FutureReader<u64>> + Send {
         let instance = accessor.instance();
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
+        let generation = accessor.with(|mut access| access.get().runtime_generation());
         let register_state = accessor.with(|mut access| access.get().register_state());
         let future = accessor.with(|mut access| {
             FutureReader::new(instance, &mut access, async move {
@@ -133,7 +149,13 @@ impl psys_host::timer::HostWithStore for PluginCtx {
                         ticker.tick().await;
                         let timer_payload =
                             build_timer_payload(timer_id, TimerKind::Interval, payload.clone());
-                        dispatch_timer_event(plugin_name.clone(), timer_id, timer_payload).await;
+                        dispatch_timer_event(
+                            plugin_name.clone(),
+                            generation,
+                            timer_id,
+                            timer_payload,
+                        )
+                        .await;
                     }
                 });
                 register_state.insert_timer(timer_id, handle);

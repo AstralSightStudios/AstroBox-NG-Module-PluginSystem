@@ -304,7 +304,10 @@ fn clamp_dimension(value: f64) -> u32 {
 
 const RENDER_SIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(800);
 
-async fn fetch_render_size(app_handle: &AppHandle, plugin_name: String) -> psys_host::ui_v3::RenderSize {
+async fn fetch_render_size(
+    app_handle: &AppHandle,
+    plugin_name: String,
+) -> psys_host::ui_v3::RenderSize {
     let zero = psys_host::ui_v3::RenderSize {
         width: 0,
         height: 0,
@@ -330,10 +333,7 @@ async fn fetch_render_size(app_handle: &AppHandle, plugin_name: String) -> psys_
             zero
         }
         Err(_) => {
-            log::warn!(
-                "[plugin:{}] ui render size query timed out",
-                plugin_name
-            );
+            log::warn!("[plugin:{}] ui render size query timed out", plugin_name);
             zero
         }
     }
