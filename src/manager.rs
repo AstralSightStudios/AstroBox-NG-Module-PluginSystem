@@ -22,7 +22,6 @@ pub struct PluginManager {
     plugin_root: PathBuf,
     app_handle: AppHandle,
     pub plugins: HashMap<String, Plugin>,
-    pending_plugins: HashMap<String, PathBuf>,
     pub updated: bool,
     change_generation: AtomicU64,
 }
@@ -142,7 +141,6 @@ impl PluginManager {
             plugin_root: root,
             app_handle,
             plugins: HashMap::new(),
-            pending_plugins: HashMap::new(),
             updated: false,
             change_generation: AtomicU64::new(0),
         }
@@ -399,64 +397,6 @@ impl PluginManager {
             .with_context(|| format!("failed to restore plugin '{}' during rollback", name))
     }
 
-    fn schedule_plugin_activation(&mut self, name: String, staging_dir: PathBuf) {
-        self.updated = true;
-        if let Some(previous) = self
-            .pending_plugins
-            .insert(name.clone(), staging_dir.clone())
-        {
-            let _ = fs::remove_dir_all(previous);
-        }
-        self.emit_progress(&name, "queued", None);
-
-        let prepare_path = staging_dir.clone();
-        let app_handle = self.app_handle.clone();
-        tokio::spawn(async move {
-            let prepared =
-                tokio::task::spawn_blocking(move || Plugin::load(prepare_path, app_handle)).await;
-            let result = crate::with_plugin_manager_async(move |pm| {
-                Box::pin(async move {
-                    match prepared {
-                        Ok(Ok(plugin)) => pm.activate_prepared_plugin(staging_dir, plugin).await,
-                        Ok(Err(err)) => pm.fail_pending_activation(name, staging_dir, err).await,
-                        Err(err) => {
-                            pm.fail_pending_activation(
-                                name,
-                                staging_dir,
-                                anyhow!("plugin preparation task failed: {err}"),
-                            )
-                            .await
-                        }
-                    }
-                })
-            })
-            .await;
-            if let Err(err) = result {
-                log::error!("[pluginsystem] background plugin activation failed: {err}");
-            }
-        });
-    }
-
-    async fn fail_pending_activation(
-        &mut self,
-        name: String,
-        staging_dir: PathBuf,
-        error: anyhow::Error,
-    ) -> Result<()> {
-        let is_current = self
-            .pending_plugins
-            .get(&name)
-            .is_some_and(|pending| pending == &staging_dir);
-        if !is_current {
-            return Ok(());
-        }
-        self.pending_plugins.remove(&name);
-        let _ = fs::remove_dir_all(&staging_dir);
-        log::error!("[plugin:{}] background activation failed: {error}", name);
-        self.emit_current_plugin_state(&name, "rollback");
-        Ok(())
-    }
-
     async fn load_plugin_from_path(&self, path: PathBuf) -> Result<Plugin> {
         let app_handle = self.app_handle.clone();
         tokio::task::spawn_blocking(move || Plugin::load(path, app_handle))
@@ -490,21 +430,13 @@ impl PluginManager {
         Ok(())
     }
 
-    async fn activate_prepared_plugin(
-        &mut self,
-        staging_dir: PathBuf,
-        new_plugin: Plugin,
-    ) -> Result<()> {
-        let name = new_plugin.manifest.name.clone();
-        let is_current = self
-            .pending_plugins
-            .get(&name)
-            .is_some_and(|pending| pending == &staging_dir);
-        if !is_current {
-            drop(new_plugin);
-            return Ok(());
-        }
-        self.pending_plugins.remove(&name);
+    // The install command must not return until the swap and first start have
+    // completed. Otherwise the frontend reports success while Windows may
+    // still be failing to rename or load the staged directory in the
+    // background.
+    async fn activate_staged_plugin(&mut self, name: String, staging_dir: PathBuf) -> Result<()> {
+        self.updated = true;
+        self.emit_progress(&name, "activate", None);
 
         let destination = self.plugin_root.join(&name);
         fs::create_dir_all(&self.plugin_root)?;
@@ -523,14 +455,14 @@ impl PluginManager {
             }
         }
 
-        // Windows keeps the precompiled component file open while a Plugin is
-        // alive. Release both runtimes before renaming their parent folders.
+        // Stop and release the old runtime before renaming its directory. The
+        // replacement is intentionally loaded only after the staged directory
+        // reaches its final location.
         let mut old_plugin = self.plugins.remove(&name);
         if let Some(plugin) = old_plugin.as_mut() {
             plugin.stop().await;
         }
         drop(old_plugin);
-        drop(new_plugin);
 
         if had_destination {
             if let Err(err) = fs::rename(&destination, &backup_dir) {
@@ -699,8 +631,8 @@ impl PluginManager {
             let _ = fs::remove_dir_all(&staging_dir);
             return Err(err);
         }
-        self.schedule_plugin_activation(manifest.name, staging_dir);
-        Ok(())
+        self.activate_staged_plugin(manifest.name, staging_dir)
+            .await
     }
 
     pub async fn add_from_abp(&mut self, _name: &str, path: &Path) -> Result<()> {
@@ -718,8 +650,8 @@ impl PluginManager {
             let _ = fs::remove_dir_all(&staging_dir);
             return Err(err);
         }
-        self.schedule_plugin_activation(manifest.name, staging_dir);
-        Ok(())
+        self.activate_staged_plugin(manifest.name, staging_dir)
+            .await
     }
 
     pub async fn enable(&mut self, name: &String) -> bool {
@@ -923,20 +855,8 @@ impl PluginManager {
 
     pub async fn remove(&mut self, name: &String) -> bool {
         self.updated = true;
-        let cancelled_pending = self
-            .pending_plugins
-            .remove(name)
-            .map(|staging_dir| {
-                let _ = fs::remove_dir_all(staging_dir);
-            })
-            .is_some();
         let (plugin_path, plugin_manifest) = match self.take_plugin_for_cleanup(name).await {
             Some(plugin) => plugin,
-            None if cancelled_pending => {
-                self.set_plugin_disabled_persisted(name, false).await;
-                self.emit_plugin_changed(name, "removed", None, false, true);
-                return true;
-            }
             None => {
                 log::error!("[plugin:{}] Not found", name);
                 return false;

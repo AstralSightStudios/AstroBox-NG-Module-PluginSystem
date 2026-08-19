@@ -608,6 +608,40 @@ fn create_engine() -> Result<Engine> {
     Engine::new(&config).context("Failed to initialize the Wasmtime engine")
 }
 
+fn load_precompiled_component(engine: &Engine, artifact_path: &Path) -> Result<Component> {
+    #[cfg(target_os = "windows")]
+    {
+        // Wasmtime's Windows file mapping opens the artifact with
+        // FILE_SHARE_READ only. Loading from bytes avoids keeping a handle to
+        // the .cwasm file alive, which otherwise prevents a hot-reload rename
+        // while any cloned PluginRuntime still owns the Component.
+        let artifact = fs::read(artifact_path).with_context(|| {
+            format!(
+                "Failed to read precompiled plugin component: {}",
+                artifact_path.display()
+            )
+        })?;
+        return unsafe {
+            Component::deserialize(engine, artifact).with_context(|| {
+                format!(
+                    "Failed to load precompiled plugin component: {}",
+                    artifact_path.display()
+                )
+            })
+        };
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    unsafe {
+        Component::deserialize_file(engine, artifact_path).with_context(|| {
+            format!(
+                "Failed to load precompiled plugin component: {}",
+                artifact_path.display()
+            )
+        })
+    }
+}
+
 fn emit_pluginsystem_progress(
     app_handle: &AppHandle,
     plugin: &str,
@@ -731,16 +765,7 @@ impl PluginRuntime {
         let artifact_path = ensure_precompiled_component(&engine, path, manifest, &entry_path)?;
 
         log::info!("[plugin:{}] Loading precompiled component...", plugin_name);
-        let component = unsafe {
-            // SAFETY: `artifact_path` is produced via `Engine::precompile_component` with
-            // the same engine configuration, satisfying Wasmtime's deserialize requirements.
-            Component::deserialize_file(&engine, &artifact_path).with_context(|| {
-                format!(
-                    "Failed to load precompiled plugin component: {}",
-                    artifact_path.display()
-                )
-            })?
-        };
+        let component = load_precompiled_component(&engine, &artifact_path)?;
 
         let epoch_owner = register_epoch_engine(&engine);
         Ok(Self {
