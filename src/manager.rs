@@ -384,7 +384,7 @@ impl PluginManager {
             let _ = fs::remove_dir_all(staging_dir);
         }
 
-        let Some((was_loaded, was_disabled)) = previous_state else {
+        let Some(previous_state) = previous_state else {
             return Ok(());
         };
         if !destination.is_dir() {
@@ -394,19 +394,9 @@ impl PluginManager {
             ));
         }
 
-        let mut restored = Plugin::load(destination.to_path_buf(), self.app_handle.clone())
-            .with_context(|| format!("failed to reload plugin '{}' during rollback", name))?;
-        if was_loaded && !was_disabled {
-            restored
-                .run()
-                .await
-                .with_context(|| format!("failed to restart plugin '{}' during rollback", name))?;
-        } else {
-            restored.state.disabled = was_disabled;
-            restored.state.loaded = false;
-        }
-        self.plugins.insert(name.to_string(), restored);
-        Ok(())
+        self.restore_plugin_after_swap_failure(name, destination, Some(previous_state))
+            .await
+            .with_context(|| format!("failed to restore plugin '{}' during rollback", name))
     }
 
     fn schedule_plugin_activation(&mut self, name: String, staging_dir: PathBuf) {
@@ -467,10 +457,43 @@ impl PluginManager {
         Ok(())
     }
 
+    async fn load_plugin_from_path(&self, path: PathBuf) -> Result<Plugin> {
+        let app_handle = self.app_handle.clone();
+        tokio::task::spawn_blocking(move || Plugin::load(path, app_handle))
+            .await
+            .context("plugin preparation task failed")?
+    }
+
+    async fn restore_plugin_after_swap_failure(
+        &mut self,
+        name: &str,
+        destination: &Path,
+        previous_state: Option<(bool, bool)>,
+    ) -> Result<()> {
+        let Some((was_loaded, was_disabled)) = previous_state else {
+            return Ok(());
+        };
+
+        let mut restored = self
+            .load_plugin_from_path(destination.to_path_buf())
+            .await
+            .with_context(|| format!("failed to reload plugin '{}' after swap failure", name))?;
+        if was_loaded && !was_disabled {
+            restored.run().await.with_context(|| {
+                format!("failed to restart plugin '{}' after swap failure", name)
+            })?;
+        } else {
+            restored.state.disabled = was_disabled;
+            restored.state.loaded = false;
+        }
+        self.plugins.insert(name.to_string(), restored);
+        Ok(())
+    }
+
     async fn activate_prepared_plugin(
         &mut self,
         staging_dir: PathBuf,
-        mut new_plugin: Plugin,
+        new_plugin: Plugin,
     ) -> Result<()> {
         let name = new_plugin.manifest.name.clone();
         let is_current = self
@@ -489,11 +512,6 @@ impl PluginManager {
             .plugins
             .get(&name)
             .map(|plugin| (plugin.state.loaded, plugin.state.disabled));
-        let mut old_plugin = self.plugins.remove(&name);
-        if let Some(plugin) = old_plugin.as_mut() {
-            plugin.stop().await;
-        }
-
         let had_destination = destination.exists();
         let backup_dir = self.backup_dir(&name);
         if had_destination {
@@ -503,25 +521,43 @@ impl PluginManager {
             if backup_dir.exists() {
                 fs::remove_dir_all(&backup_dir)?;
             }
+        }
+
+        // Windows keeps the precompiled component file open while a Plugin is
+        // alive. Release both runtimes before renaming their parent folders.
+        let mut old_plugin = self.plugins.remove(&name);
+        if let Some(plugin) = old_plugin.as_mut() {
+            plugin.stop().await;
+        }
+        drop(old_plugin);
+        drop(new_plugin);
+
+        if had_destination {
             if let Err(err) = fs::rename(&destination, &backup_dir) {
-                if let Some(plugin) = old_plugin {
-                    self.plugins.insert(name.clone(), plugin);
-                }
-                return Err(err).with_context(|| {
-                    format!(
-                        "failed to backup plugin directory {} to {}",
+                let _ = fs::remove_dir_all(&staging_dir);
+                let restore = self
+                    .restore_plugin_after_swap_failure(&name, &destination, previous_state)
+                    .await;
+                return match restore {
+                    Ok(()) => Err(err).with_context(|| {
+                        format!(
+                            "failed to backup plugin directory {} to {}",
+                            destination.display(),
+                            backup_dir.display()
+                        )
+                    }),
+                    Err(restore_err) => Err(anyhow!(
+                        "failed to backup plugin directory {} to {}: {}; restore failed: {}",
                         destination.display(),
-                        backup_dir.display()
-                    )
-                });
+                        backup_dir.display(),
+                        err,
+                        restore_err
+                    )),
+                };
             }
         }
-        // Drop the old Component only after the backup succeeds, so a failed
-        // backup can restore the exact old Plugin without reloading it.
-        drop(old_plugin);
 
         if let Err(err) = fs::rename(&staging_dir, &destination) {
-            drop(new_plugin);
             let rollback = self
                 .rollback_plugin_swap(
                     &name,
@@ -546,7 +582,37 @@ impl PluginManager {
             };
         }
 
-        new_plugin.relocate(destination.clone());
+        // Load the component only after the staged directory has reached its
+        // final location. This avoids Windows rename failures caused by the
+        // component mapping still referencing a file under the staging path.
+        let mut new_plugin = match self.load_plugin_from_path(destination.clone()).await {
+            Ok(plugin) => plugin,
+            Err(err) => {
+                let rollback = self
+                    .rollback_plugin_swap(
+                        &name,
+                        &destination,
+                        &staging_dir,
+                        &backup_dir,
+                        had_destination,
+                        previous_state,
+                    )
+                    .await;
+                return match rollback {
+                    Ok(()) => {
+                        self.emit_current_plugin_state(&name, "rollback");
+                        Err(anyhow!("failed to load plugin '{}': {}", name, err))
+                    }
+                    Err(rollback_err) => Err(anyhow!(
+                        "failed to load plugin '{}': {}; rollback failed: {}",
+                        name,
+                        err,
+                        rollback_err
+                    )),
+                };
+            }
+        };
+
         let should_start = previous_state
             .map(|(was_loaded, was_disabled)| was_loaded && !was_disabled)
             .unwrap_or(true);
