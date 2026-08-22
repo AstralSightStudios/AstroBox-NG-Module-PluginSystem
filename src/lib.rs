@@ -6,7 +6,10 @@ use serde::Serialize;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::{cell::RefCell, path::PathBuf, thread};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
@@ -150,6 +153,26 @@ enum Command {
 static PLUGIN_TX: OnceCell<mpsc::UnboundedSender<Command>> = OnceCell::new();
 static PLUGINSYSTEM_INIT_STATE: Lazy<Mutex<Option<PluginSystemReadyPayload>>> =
     Lazy::new(|| Mutex::new(None));
+static RESOURCE_TRANSFER_PAUSE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+pub struct ResourceTransferGuard;
+
+pub fn begin_resource_transfer() -> ResourceTransferGuard {
+    RESOURCE_TRANSFER_PAUSE_COUNT.fetch_add(1, Ordering::AcqRel);
+    ResourceTransferGuard
+}
+
+impl Drop for ResourceTransferGuard {
+    fn drop(&mut self) {
+        RESOURCE_TRANSFER_PAUSE_COUNT.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub(crate) async fn wait_for_plugin_initialization_slot() {
+    while RESOURCE_TRANSFER_PAUSE_COUNT.load(Ordering::Acquire) > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
 
 thread_local! {
     static PM_IN_THREAD: RefCell<Option<*mut PluginManager>> = const { RefCell::new(None) };

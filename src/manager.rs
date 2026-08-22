@@ -147,6 +147,7 @@ impl PluginManager {
     }
 
     pub async fn add(&mut self, path: &Path) -> Result<()> {
+        crate::wait_for_plugin_initialization_slot().await;
         let dir_label = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -171,6 +172,7 @@ impl PluginManager {
         let mut errors = Vec::new();
 
         for name in names {
+            crate::wait_for_plugin_initialization_slot().await;
             if let Err(err) = self.start_plugin(&name).await {
                 log::error!("[plugin:{}] Failed to start: {err}", name);
                 errors.push(err.to_string());
@@ -234,6 +236,7 @@ impl PluginManager {
     }
 
     pub async fn start_plugin(&mut self, name: &str) -> Result<()> {
+        crate::wait_for_plugin_initialization_slot().await;
         let mut should_remove = false;
         let app_handle = self.app_handle.clone();
         let emit_progress = |plugin: &str, stage: &str, detail: Option<String>| {
@@ -908,6 +911,7 @@ impl PluginManager {
             let entry = entry?;
             let path = entry.path();
             if path.is_dir() {
+                crate::wait_for_plugin_initialization_slot().await;
                 if let Err(e) = self.add(&path).await {
                     let detail =
                         format!("Failed to load plugin from {}: {e}", path.to_string_lossy());
@@ -921,6 +925,7 @@ impl PluginManager {
                 }
             }
         }
+        crate::wait_for_plugin_initialization_slot().await;
         let disabled_map = self.load_disabled_map().await;
         for (name, plugin) in self.plugins.iter_mut() {
             let disabled = disabled_map.get(name).copied().unwrap_or(false);
