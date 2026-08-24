@@ -3,6 +3,13 @@ name = "pluginsystem"
 version = "2.0.0"
 edition = "2024"
 
+[features]
+runtime-validation = ["tauri/test"]
+
+[[example]]
+name = "validate_plugin_runtime"
+required-features = ["runtime-validation"]
+
 [dependencies]
 anyhow = "1.0"
 crossbeam-channel = "0.5"
@@ -31,18 +38,18 @@ pb = { path = "../pb" }
 prost = "0.14.1"
 
 # Wasmtime
-wasmtime = { version = "38.0.3", features = [
+wasmtime = { version = "46.0.2", features = [
     "async",
     "component-model",
     "component-model-async",
     "pulley",
 ] }
-wasmtime-wasi = "38.0.3"
+wasmtime-wasi = "46.0.2"
 sha2 = "0.10"
 hex = "0.4"
 
 # Wasmtime WASI APIs
-wasmtime-wasi-http = "38.0.3"
+wasmtime-wasi-http = "46.0.2"
 tauri = { version = "2.11.3", features = ["rustls-tls"] }
 tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-dialog = "2.7.1"

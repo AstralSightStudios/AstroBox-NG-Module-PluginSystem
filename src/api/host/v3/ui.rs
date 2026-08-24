@@ -4,11 +4,11 @@ use rand::Rng;
 use rand::distr::Alphanumeric;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use wasmtime::component::{Accessor, FutureReader, Resource};
+use wasmtime::component::{Access, FutureReader, Resource};
 
 use crate::bindings::astrobox::psys_host;
 
-use crate::api::host::PluginCtx;
+use crate::api::host::{AccessExt, PluginCtx};
 
 #[derive(Clone, Serialize)]
 pub struct Element {
@@ -339,20 +339,19 @@ async fn fetch_render_size(
     }
 }
 
-impl psys_host::ui_v3::HostWithStore for PluginCtx {
-    fn get_render_size<T>(
-        accessor: &Accessor<T, Self>,
-    ) -> impl core::future::Future<Output = FutureReader<psys_host::ui_v3::RenderSize>> + Send {
-        let instance = accessor.instance();
+impl<T> psys_host::ui_v3::HostWithStore<T> for PluginCtx {
+    fn get_render_size(
+        mut accessor: Access<'_, T, Self>,
+    ) -> FutureReader<psys_host::ui_v3::RenderSize> {
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let size = fetch_render_size(&app_handle, plugin_name).await;
                 Ok::<psys_host::ui_v3::RenderSize, anyhow::Error>(size)
             })
         });
-        async move { future }
+        future
     }
 }
 impl psys_host::ui_v3::HostElement for PluginCtx {

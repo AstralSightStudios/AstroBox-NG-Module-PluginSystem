@@ -10,16 +10,18 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, FilePath, MessageDialogButtons, MessageDialogResult};
 use tauri_plugin_fs::{FsExt, OpenOptions};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::oneshot;
-use wasmtime::component::{Accessor, FutureReader};
+use wasmtime::component::{Access, FutureReader};
 
 use crate::bindings::astrobox::psys_host;
 
-use super::{HostString, HostVec, PluginCtx};
+use super::{AccessExt, HostString, HostVec, PluginCtx};
 
 struct SaveFileSession {
     file: std::fs::File,
@@ -79,21 +81,19 @@ impl psys_host::dialog::Host for PluginCtx {
     }
 }
 
-impl psys_host::dialog::HostWithStore for PluginCtx {
-    fn show_dialog<T>(
-        accessor: &Accessor<T, Self>,
+impl<T> psys_host::dialog::HostWithStore<T> for PluginCtx {
+    fn show_dialog(
+        mut accessor: Access<'_, T, Self>,
         dialog_type: psys_host::dialog::DialogType,
         style: psys_host::dialog::DialogStyle,
         info: psys_host::dialog::DialogInfo,
-    ) -> impl core::future::Future<Output = FutureReader<psys_host::dialog::DialogResult>> + Send
-    {
-        let instance = accessor.instance();
+    ) -> FutureReader<psys_host::dialog::DialogResult> {
         let future = accessor.with(|mut access| {
             let (app_handle, plugin_name) = {
                 let ctx = access.get();
                 (ctx.app_handle(), ctx.plugin_name().to_string())
             };
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 match (dialog_type, style) {
                     (
                         psys_host::dialog::DialogType::Alert,
@@ -113,16 +113,14 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                 }
             })
         });
-        async move { future }
+        future
     }
 
-    fn pick_file<T>(
-        accessor: &Accessor<T, Self>,
+    fn pick_file(
+        mut accessor: Access<'_, T, Self>,
         config: psys_host::dialog::PickConfig,
         filter: psys_host::dialog::FilterConfig,
-    ) -> impl core::future::Future<Output = FutureReader<psys_host::dialog::PickResult>> + Send
-    {
-        let instance = accessor.instance();
+    ) -> FutureReader<psys_host::dialog::PickResult> {
         let future = accessor.with(|mut access| {
             let app_handle = {
                 let ctx = access.get();
@@ -132,20 +130,17 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                 let ctx = access.get();
                 ctx.plugin_root().clone()
             };
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 pick_file_with_dialog(app_handle, plugin_root, config, filter).await
             })
         });
-        async move { future }
+        future
     }
 
-    fn save_file_start<T>(
-        accessor: &Accessor<T, Self>,
+    fn save_file_start(
+        mut accessor: Access<'_, T, Self>,
         filter: psys_host::dialog::FilterConfig,
-    ) -> impl core::future::Future<
-        Output = FutureReader<core::result::Result<psys_host::dialog::SaveSession, ()>>,
-    > + Send {
-        let instance = accessor.instance();
+    ) -> FutureReader<core::result::Result<psys_host::dialog::SaveSession, ()>> {
         let future = accessor.with(|mut access| {
             let app_handle = {
                 let ctx = access.get();
@@ -155,26 +150,25 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                 let ctx = access.get();
                 ctx.plugin_name().to_string()
             };
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let result = save_file_start_with_dialog(app_handle, plugin_name, filter).await;
                 Ok::<core::result::Result<psys_host::dialog::SaveSession, ()>, Error>(result)
             })
         });
-        async move { future }
+        future
     }
 
-    fn save_file_write_chunk<T>(
-        accessor: &Accessor<T, Self>,
+    fn save_file_write_chunk(
+        mut accessor: Access<'_, T, Self>,
         session_id: u64,
         data: HostVec<u8>,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
+    ) -> FutureReader<core::result::Result<(), ()>> {
         let future = accessor.with(|mut access| {
             let plugin_name = {
                 let ctx = access.get();
                 ctx.plugin_name().to_string()
             };
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let key = (plugin_name.clone(), session_id);
                 let write_result = {
                     let mut sessions = SAVE_FILE_SESSIONS
@@ -203,20 +197,19 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                 Ok::<core::result::Result<(), ()>, Error>(Ok(()))
             })
         });
-        async move { future }
+        future
     }
 
-    fn save_file_finish<T>(
-        accessor: &Accessor<T, Self>,
+    fn save_file_finish(
+        mut accessor: Access<'_, T, Self>,
         session_id: u64,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
+    ) -> FutureReader<core::result::Result<(), ()>> {
         let future = accessor.with(|mut access| {
             let plugin_name = {
                 let ctx = access.get();
                 ctx.plugin_name().to_string()
             };
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let key = (plugin_name.clone(), session_id);
                 let mut session = {
                     let mut sessions = SAVE_FILE_SESSIONS
@@ -246,20 +239,16 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                 Ok::<core::result::Result<(), ()>, Error>(Ok(()))
             })
         });
-        async move { future }
+        future
     }
 
-    fn save_file_abort<T>(
-        accessor: &Accessor<T, Self>,
-        session_id: u64,
-    ) -> impl core::future::Future<Output = FutureReader<()>> + Send {
-        let instance = accessor.instance();
+    fn save_file_abort(mut accessor: Access<'_, T, Self>, session_id: u64) -> FutureReader<()> {
         let future = accessor.with(|mut access| {
             let plugin_name = {
                 let ctx = access.get();
                 ctx.plugin_name().to_string()
             };
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let key = (plugin_name.clone(), session_id);
                 let removed = {
                     let mut sessions = SAVE_FILE_SESSIONS
@@ -277,7 +266,7 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                 Ok::<(), Error>(())
             })
         });
-        async move { future }
+        future
     }
 }
 

@@ -6,25 +6,24 @@ use corelib::device::xiaomi::components::{
 };
 use log::error;
 use serde_json::json;
-use wasmtime::component::{Accessor, FutureReader};
+use wasmtime::component::{Access, FutureReader};
 
-use super::{HostString, PluginCtx, permission::check_permission_declared};
+use super::{AccessExt, HostString, PluginCtx, permission::check_permission_declared};
 
 impl psys_host::interconnect::Host for PluginCtx {}
 
-impl psys_host::interconnect::HostWithStore for PluginCtx {
-    fn send_qaic_message<T>(
-        accessor: &Accessor<T, Self>,
+impl<T> psys_host::interconnect::HostWithStore<T> for PluginCtx {
+    fn send_qaic_message(
+        mut accessor: Access<'_, T, Self>,
         device_addr: HostString,
         pkg_name: HostString,
         data: HostString,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
+    ) -> FutureReader<core::result::Result<(), ()>> {
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let device_addr = device_addr.to_string();
                 let pkg_name = pkg_name.to_string();
                 let payload = data.to_string().into_bytes();
@@ -54,7 +53,7 @@ impl psys_host::interconnect::HostWithStore for PluginCtx {
                 }
             })
         });
-        async move { future }
+        future
     }
 }
 

@@ -2,7 +2,7 @@ use crate::bindings::astrobox::psys_host;
 use anyhow::Error;
 use serde_json::{Value, json};
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use wasmtime::component::{Accessor, FutureReader};
+use wasmtime::component::{Access, FutureReader};
 
 use super::{HostString, PluginCtx, permission::check_permission_declared};
 
@@ -11,77 +11,68 @@ const WRITE_PERMISSION: &str = "clipboard.write";
 
 impl psys_host::clipboard::Host for PluginCtx {}
 
-impl psys_host::clipboard::HostWithStore for PluginCtx {
-    fn read_text<T>(
-        accessor: &Accessor<T, Self>,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<HostString, ()>>> + Send
-    {
-        let instance = accessor.instance();
-        let app_handle = accessor.with(|mut access| access.get().app_handle());
-        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
-        let permissions = accessor.with(|mut access| access.get().permissions());
-        let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
-                if !check_permission_declared(
-                    &app_handle,
-                    permissions.as_ref(),
-                    READ_PERMISSION,
-                    clipboard_permission_params(&plugin_name),
-                )
-                .await
-                {
-                    return Ok::<core::result::Result<HostString, ()>, Error>(Err(()));
-                }
+impl<T> psys_host::clipboard::HostWithStore<T> for PluginCtx {
+    fn read_text(
+        mut access: Access<'_, T, Self>,
+    ) -> FutureReader<core::result::Result<HostString, ()>> {
+        let app_handle = access.get().app_handle();
+        let plugin_name = access.get().plugin_name().to_string();
+        let permissions = access.get().permissions();
+        crate::api::host::new_future_reader!(&mut access, async move {
+            if !check_permission_declared(
+                &app_handle,
+                permissions.as_ref(),
+                READ_PERMISSION,
+                clipboard_permission_params(&plugin_name),
+            )
+            .await
+            {
+                return Ok::<core::result::Result<HostString, ()>, Error>(Err(()));
+            }
 
-                match app_handle.clipboard().read_text() {
-                    Ok(content) => {
-                        Ok::<core::result::Result<HostString, ()>, Error>(Ok(content.into()))
-                    }
-                    Err(err) => {
-                        log::warn!("[plugin:{}] clipboard read_text failed: {err}", plugin_name);
-                        Ok::<core::result::Result<HostString, ()>, Error>(Err(()))
-                    }
+            match app_handle.clipboard().read_text() {
+                Ok(content) => {
+                    Ok::<core::result::Result<HostString, ()>, Error>(Ok(content.into()))
                 }
-            })
-        });
-        async move { future }
+                Err(err) => {
+                    log::warn!("[plugin:{}] clipboard read_text failed: {err}", plugin_name);
+                    Ok::<core::result::Result<HostString, ()>, Error>(Err(()))
+                }
+            }
+        })
     }
 
-    fn write_text<T>(
-        accessor: &Accessor<T, Self>,
+    fn write_text(
+        mut access: Access<'_, T, Self>,
         text: HostString,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
-        let app_handle = accessor.with(|mut access| access.get().app_handle());
-        let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
-        let permissions = accessor.with(|mut access| access.get().permissions());
+    ) -> FutureReader<core::result::Result<(), ()>> {
+        let app_handle = access.get().app_handle();
+        let plugin_name = access.get().plugin_name().to_string();
+        let permissions = access.get().permissions();
         let text = text.to_string();
-        let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
-                if !check_permission_declared(
-                    &app_handle,
-                    permissions.as_ref(),
-                    WRITE_PERMISSION,
-                    clipboard_permission_params(&plugin_name),
-                )
-                .await
-                {
-                    return Ok::<core::result::Result<(), ()>, Error>(Err(()));
-                }
+        crate::api::host::new_future_reader!(&mut access, async move {
+            if !check_permission_declared(
+                &app_handle,
+                permissions.as_ref(),
+                WRITE_PERMISSION,
+                clipboard_permission_params(&plugin_name),
+            )
+            .await
+            {
+                return Ok::<core::result::Result<(), ()>, Error>(Err(()));
+            }
 
-                match app_handle.clipboard().write_text(text) {
-                    Ok(()) => Ok::<core::result::Result<(), ()>, Error>(Ok(())),
-                    Err(err) => {
-                        log::warn!(
-                            "[plugin:{}] clipboard write_text failed: {err}",
-                            plugin_name
-                        );
-                        Ok::<core::result::Result<(), ()>, Error>(Err(()))
-                    }
+            match app_handle.clipboard().write_text(text) {
+                Ok(()) => Ok::<core::result::Result<(), ()>, Error>(Ok(())),
+                Err(err) => {
+                    log::warn!(
+                        "[plugin:{}] clipboard write_text failed: {err}",
+                        plugin_name
+                    );
+                    Ok::<core::result::Result<(), ()>, Error>(Err(()))
                 }
-            })
-        });
-        async move { future }
+            }
+        })
     }
 }
 

@@ -542,11 +542,11 @@ fn ensure_precompiled_component(
                 entry_wasm.display()
             )
         })?;
-        let compiled = engine.precompile_component(&wasm_bytes).with_context(|| {
-            format!(
+        let compiled = engine.precompile_component(&wasm_bytes).map_err(|err| {
+            anyhow::Error::from(err.context(format!(
                 "failed to precompile component for plugin {}",
                 manifest.name
-            )
+            )))
         })?;
 
         fs::write(&artifact_path, compiled).with_context(|| {
@@ -602,10 +602,10 @@ fn create_engine() -> Result<Engine> {
         .wasm_memory64(false)
         .wasm_component_model(true)
         .wasm_component_model_async(true)
-        .async_support(true)
         .epoch_interruption(true);
 
-    Engine::new(&config).context("Failed to initialize the Wasmtime engine")
+    Engine::new(&config)
+        .map_err(|err| anyhow::Error::from(err.context("Failed to initialize the Wasmtime engine")))
 }
 
 fn load_precompiled_component(engine: &Engine, artifact_path: &Path) -> Result<Component> {
@@ -622,22 +622,22 @@ fn load_precompiled_component(engine: &Engine, artifact_path: &Path) -> Result<C
             )
         })?;
         return unsafe {
-            Component::deserialize(engine, artifact).with_context(|| {
-                format!(
+            Component::deserialize(engine, artifact).map_err(|err| {
+                anyhow::Error::from(err.context(format!(
                     "Failed to load precompiled plugin component: {}",
                     artifact_path.display()
-                )
+                )))
             })
         };
     }
 
     #[cfg(not(target_os = "windows"))]
     unsafe {
-        Component::deserialize_file(engine, artifact_path).with_context(|| {
-            format!(
+        Component::deserialize_file(engine, artifact_path).map_err(|err| {
+            anyhow::Error::from(err.context(format!(
                 "Failed to load precompiled plugin component: {}",
                 artifact_path.display()
-            )
+            )))
         })
     }
 }
@@ -695,7 +695,7 @@ impl<D> FutureConsumer<D> for DrainStringFuture {
         store: StoreContextMut<D>,
         mut source: Source<'_, Self::Item>,
         _finish: bool,
-    ) -> Poll<Result<()>> {
+    ) -> Poll<wasmtime::Result<()>> {
         let mut value = None;
         source.read(store, &mut value)?;
         Poll::Ready(Ok(()))
@@ -713,7 +713,7 @@ impl<D> FutureConsumer<D> for DrainUnitFuture {
         store: StoreContextMut<D>,
         mut source: Source<'_, Self::Item>,
         _finish: bool,
-    ) -> Poll<Result<()>> {
+    ) -> Poll<wasmtime::Result<()>> {
         let mut value = None;
         source.read(store, &mut value)?;
         Poll::Ready(Ok(()))
@@ -721,6 +721,17 @@ impl<D> FutureConsumer<D> for DrainUnitFuture {
 }
 
 impl PluginRuntime {
+    fn guest_callback_error(err: wasmtime::Error, callback: &str) -> anyhow::Error {
+        let detail = format!("{err:#}");
+        if detail.contains("cannot block a synchronous task") {
+            return anyhow::anyhow!(
+                "{}: this plugin uses legacy synchronous blocking for an async host call; rebuild it with the current AstroBox plugin SDK instead of calling `wit_bindgen::block_on` from synchronous exports such as `lifecycle.on-load`, and move the work into `wit_bindgen::spawn` or an async export.",
+                callback
+            );
+        }
+        anyhow::Error::from(err.context(callback.to_owned()))
+    }
+
     fn normalize_permissions(raw: &[String]) -> Vec<String> {
         raw.iter()
             .map(|permission| permission.trim().to_ascii_lowercase())
@@ -790,11 +801,11 @@ impl PluginRuntime {
 
         builder
             .preopened_dir(&self.plugin_root, ".", DirPerms::all(), FilePerms::all())
-            .with_context(|| {
-                format!(
+            .map_err(|err| {
+                anyhow::Error::from(err.context(format!(
                     "Failed to pre-open directory for plugin: {}",
                     self.plugin_root.display()
-                )
+                )))
             })?;
 
         Ok(builder.build())
@@ -821,15 +832,17 @@ impl PluginRuntime {
 
     fn build_linker(&self) -> Result<Linker<PluginCtx>> {
         let mut linker = Linker::new(&self.engine);
-        p2::add_to_linker_async(&mut linker)
-            .context("Failed to register the WASI interface with Linker")?;
+        p2::add_to_linker_async(&mut linker).map_err(|err| {
+            anyhow::Error::from(err.context("Failed to register the WASI interface with Linker"))
+        })?;
 
-        wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
-            .context("Failed to register wasi-http with Linker")?;
+        wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker).map_err(|err| {
+            anyhow::Error::from(err.context("Failed to register wasi-http with Linker"))
+        })?;
 
-        PsysWorld::add_to_linker::<PluginCtx, PluginCtx>(&mut linker, |ctx| ctx)
-            .context("Failed to register the plugin host interface")?;
-
+        PsysWorld::add_to_linker::<PluginCtx, PluginCtx>(&mut linker, |ctx| ctx).map_err(
+            |err| anyhow::Error::from(err.context("Failed to register the plugin host interface")),
+        )?;
         Ok(linker)
     }
 
@@ -854,10 +867,9 @@ impl PluginRuntime {
         if self.api_level >= 3 {
             let instance = PsysWorldV3::instantiate_async(&mut store, &self.component, &linker)
                 .await
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "Failed to instantiate plugin component for api_level=3. detail: {}",
-                        e.to_string()
+                .map_err(|err| {
+                    anyhow::Error::from(
+                        err.context("Failed to instantiate plugin component for api_level=3"),
                     )
                 })?;
 
@@ -865,10 +877,9 @@ impl PluginRuntime {
             self.emit_progress("on_load", None);
             let lifecycle = instance.astrobox_psys_plugin_lifecycle();
             Self::refresh_epoch_deadline(&mut store);
-            lifecycle
-                .call_on_load(&mut store)
-                .await
-                .context("Failed to execute the plugin on-load callback")?;
+            lifecycle.call_on_load(&mut store).await.map_err(|err| {
+                Self::guest_callback_error(err, "Failed to execute the plugin on-load callback")
+            })?;
 
             let mut guard = self.instance.lock().await;
             *guard = Some(PluginInstance::V3 {
@@ -880,21 +891,17 @@ impl PluginRuntime {
 
         let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
             .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to instantiate plugin component. detail: {}",
-                    e.to_string()
-                )
+            .map_err(|err| {
+                anyhow::Error::from(err.context("Failed to instantiate plugin component"))
             })?;
 
         log::info!("[plugin:{}] Calling on_load...", self.name.clone());
         self.emit_progress("on_load", None);
         let lifecycle = instance.astrobox_psys_plugin_lifecycle();
         Self::refresh_epoch_deadline(&mut store);
-        lifecycle
-            .call_on_load(&mut store)
-            .await
-            .context("Failed to execute the plugin on-load callback")?;
+        lifecycle.call_on_load(&mut store).await.map_err(|err| {
+            Self::guest_callback_error(err, "Failed to execute the plugin on-load callback")
+        })?;
 
         let mut guard = self.instance.lock().await;
         *guard = Some(PluginInstance::V2 {
@@ -1000,7 +1007,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                future.pipe(&mut *store, DrainStringFuture);
+                let _ = future.pipe(&mut *store, DrainStringFuture);
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
@@ -1040,7 +1047,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                future.pipe(&mut *store, DrainStringFuture);
+                let _ = future.pipe(&mut *store, DrainStringFuture);
             }
         }
         tokio::task::yield_now().await;
@@ -1066,7 +1073,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                future.pipe(&mut *store, DrainUnitFuture);
+                let _ = future.pipe(&mut *store, DrainUnitFuture);
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
@@ -1080,7 +1087,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                future.pipe(&mut *store, DrainUnitFuture);
+                let _ = future.pipe(&mut *store, DrainUnitFuture);
             }
         }
         tokio::task::yield_now().await;
@@ -1106,7 +1113,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                future.pipe(&mut *store, DrainUnitFuture);
+                let _ = future.pipe(&mut *store, DrainUnitFuture);
             }
             PluginInstance::V3 { store, world } => {
                 let event_iface = world.astrobox_psys_plugin_event_v3();
@@ -1120,7 +1127,7 @@ impl PluginRuntime {
                             e.to_string()
                         )
                     })?;
-                future.pipe(&mut *store, DrainUnitFuture);
+                let _ = future.pipe(&mut *store, DrainUnitFuture);
             }
         }
         tokio::task::yield_now().await;
@@ -1155,7 +1162,7 @@ impl PluginRuntime {
                     e.to_string()
                 )
             })?;
-        future.pipe(&mut *store, DrainStringFuture);
+        let _ = future.pipe(&mut *store, DrainStringFuture);
         tokio::task::yield_now().await;
         Ok(())
     }
@@ -1188,7 +1195,7 @@ impl PluginRuntime {
                     e.to_string()
                 )
             })?;
-        future.pipe(&mut *store, DrainStringFuture);
+        let _ = future.pipe(&mut *store, DrainStringFuture);
         tokio::task::yield_now().await;
         Ok(())
     }

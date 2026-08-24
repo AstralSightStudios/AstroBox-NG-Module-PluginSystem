@@ -4,28 +4,27 @@ use crate::plugin::{
 };
 use anyhow::Error;
 use serde_json::json;
-use wasmtime::component::{Accessor, FutureReader};
+use wasmtime::component::{Access, FutureReader};
 
 use super::{
-    HostString, PluginCtx,
+    AccessExt, HostString, PluginCtx,
     permission::{check_permission_declared, resolve_device_name, resolve_quick_app_name},
 };
 
 impl psys_host::register::Host for PluginCtx {}
 
-impl psys_host::register::HostWithStore for PluginCtx {
-    fn register_transport_recv<T>(
-        accessor: &Accessor<T, Self>,
+impl<T> psys_host::register::HostWithStore<T> for PluginCtx {
+    fn register_transport_recv(
+        mut accessor: Access<'_, T, Self>,
         addr: HostString,
         filter: psys_host::register::TransportRecvFiler,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
+    ) -> FutureReader<core::result::Result<(), ()>> {
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let register_state = accessor.with(|mut access| access.get().register_state());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let addr = addr.to_string();
                 let psys_host::register::TransportRecvFiler {
                     xiaomi_vela_v5_channel_id,
@@ -65,21 +64,20 @@ impl psys_host::register::HostWithStore for PluginCtx {
                 Ok::<core::result::Result<(), ()>, Error>(Ok(()))
             })
         });
-        async move { future }
+        future
     }
 
-    fn register_interconnect_recv<T>(
-        accessor: &Accessor<T, Self>,
+    fn register_interconnect_recv(
+        mut accessor: Access<'_, T, Self>,
         addr: HostString,
         pkg_name: HostString,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
+    ) -> FutureReader<core::result::Result<(), ()>> {
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let register_state = accessor.with(|mut access| access.get().register_state());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let addr = addr.to_string();
                 let pkg_name = pkg_name.to_string();
                 let app_name = resolve_quick_app_name(&addr, &pkg_name).await;
@@ -107,19 +105,18 @@ impl psys_host::register::HostWithStore for PluginCtx {
                 Ok::<core::result::Result<(), ()>, Error>(Ok(()))
             })
         });
-        async move { future }
+        future
     }
 
-    fn register_deeplink_action<T>(
-        accessor: &Accessor<T, Self>,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
+    fn register_deeplink_action(
+        mut accessor: Access<'_, T, Self>,
+    ) -> FutureReader<core::result::Result<(), ()>> {
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let register_state = accessor.with(|mut access| access.get().register_state());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let params = json!({
                     "plugin": plugin_name,
                     "action": "deeplink",
@@ -143,21 +140,20 @@ impl psys_host::register::HostWithStore for PluginCtx {
                 }
             })
         });
-        async move { future }
+        future
     }
 
-    fn register_provider<T>(
-        accessor: &Accessor<T, Self>,
+    fn register_provider(
+        mut accessor: Access<'_, T, Self>,
         name: HostString,
         provider_type: psys_host::register::ProviderType,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
+    ) -> FutureReader<core::result::Result<(), ()>> {
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let register_state = accessor.with(|mut access| access.get().register_state());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let name = name.to_string();
                 let provider_label = match &provider_type {
                     psys_host::register::ProviderType::Url => "url",
@@ -189,19 +185,18 @@ impl psys_host::register::HostWithStore for PluginCtx {
                 Ok::<core::result::Result<(), ()>, Error>(Ok(()))
             })
         });
-        async move { future }
+        future
     }
 
-    fn register_card<T>(
-        accessor: &Accessor<T, Self>,
+    fn register_card(
+        mut accessor: Access<'_, T, Self>,
         card_type: psys_host::register::CardType,
         id: HostString,
         name: HostString,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
+    ) -> FutureReader<core::result::Result<(), ()>> {
         let register_state = accessor.with(|mut access| access.get().register_state());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let id = id.to_string();
                 let name = name.to_string();
 
@@ -215,6 +210,6 @@ impl psys_host::register::HostWithStore for PluginCtx {
                 Ok::<core::result::Result<(), ()>, Error>(Ok(()))
             })
         });
-        async move { future }
+        future
     }
 }

@@ -3,27 +3,24 @@ use anyhow::{Error, anyhow};
 use corelib::device::xiaomi::components::{resource::ResourceSystem, watchface::WatchfaceSystem};
 use log::error;
 use serde_json::json;
-use wasmtime::component::{Accessor, FutureReader};
+use wasmtime::component::{Access, FutureReader};
 
-use crate::api::host::{HostString, HostVec, PluginCtx, permission::check_permission_declared};
+use crate::api::host::{
+    AccessExt, HostString, HostVec, PluginCtx, permission::check_permission_declared,
+};
 
 impl psys_host::watchface::Host for PluginCtx {}
 
-impl psys_host::watchface::HostWithStore for PluginCtx {
-    fn get_watchface_list<T>(
-        accessor: &Accessor<T, Self>,
+impl<T> psys_host::watchface::HostWithStore<T> for PluginCtx {
+    fn get_watchface_list(
+        mut accessor: Access<'_, T, Self>,
         addr: HostString,
-    ) -> impl core::future::Future<
-        Output = FutureReader<
-            core::result::Result<HostVec<psys_host::watchface::WatchfaceInfo>, ()>,
-        >,
-    > + Send {
-        let instance = accessor.instance();
+    ) -> FutureReader<core::result::Result<HostVec<psys_host::watchface::WatchfaceInfo>, ()>> {
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let addr = addr.to_string();
                 let params = json!({
                     "plugin": plugin_name,
@@ -58,20 +55,19 @@ impl psys_host::watchface::HostWithStore for PluginCtx {
                 }
             })
         });
-        async move { future }
+        future
     }
 
-    fn set_current_watchface<T>(
-        accessor: &Accessor<T, Self>,
+    fn set_current_watchface(
+        mut accessor: Access<'_, T, Self>,
         addr: HostString,
         watchface_id: HostString,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<(), ()>>> + Send {
-        let instance = accessor.instance();
+    ) -> FutureReader<core::result::Result<(), ()>> {
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let addr = addr.to_string();
                 let watchface_id = watchface_id.to_string();
                 let params = json!({
@@ -99,7 +95,7 @@ impl psys_host::watchface::HostWithStore for PluginCtx {
                 }
             })
         });
-        async move { future }
+        future
     }
 }
 

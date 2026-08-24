@@ -9,10 +9,10 @@ use pb::xiaomi::protocol::WearPacket;
 use prost::Message;
 use serde_json::json;
 use std::time::Duration;
-use wasmtime::component::{Accessor, FutureReader};
+use wasmtime::component::{Access, FutureReader};
 
 use super::{
-    HostString, HostVec, PluginCtx,
+    AccessExt, HostString, HostVec, PluginCtx,
     permission::{check_permission_declared, resolve_device_name},
 };
 
@@ -91,18 +91,17 @@ impl psys_host::transport::Host for PluginCtx {
     }
 }
 
-impl psys_host::transport::HostWithStore for PluginCtx {
-    fn send<T>(
-        accessor: &Accessor<T, Self>,
+impl<T> psys_host::transport::HostWithStore<T> for PluginCtx {
+    fn send(
+        mut accessor: Access<'_, T, Self>,
         device_addr: HostString,
         data: HostVec<u8>,
-    ) -> impl core::future::Future<Output = FutureReader<()>> + Send {
-        let instance = accessor.instance();
+    ) -> FutureReader<()> {
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let device_addr = device_addr.to_string();
                 let data = data.as_slice().to_vec();
                 let device_name = resolve_device_name(&device_addr).await;
@@ -131,22 +130,20 @@ impl psys_host::transport::HostWithStore for PluginCtx {
                 Ok::<(), Error>(())
             })
         });
-        async move { future }
+        future
     }
 
-    fn request<T>(
-        accessor: &Accessor<T, Self>,
+    fn request(
+        mut accessor: Access<'_, T, Self>,
         device_addr: HostString,
         data: HostVec<u8>,
-    ) -> impl core::future::Future<Output = FutureReader<core::result::Result<HostVec<u8>, ()>>> + Send
-    {
-        let instance = accessor.instance();
+    ) -> FutureReader<core::result::Result<HostVec<u8>, ()>> {
         let app_handle = accessor.with(|mut access| access.get().app_handle());
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let generation = accessor.with(|mut access| access.get().runtime_generation());
         let permissions = accessor.with(|mut access| access.get().permissions());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let device_addr = device_addr.to_string();
                 let data = data.as_slice().to_vec();
                 let device_name = resolve_device_name(&device_addr).await;
@@ -209,6 +206,6 @@ impl psys_host::transport::HostWithStore for PluginCtx {
                 Ok::<core::result::Result<HostVec<u8>, ()>, Error>(Ok(HostVec::from(response)))
             })
         });
-        async move { future }
+        future
     }
 }

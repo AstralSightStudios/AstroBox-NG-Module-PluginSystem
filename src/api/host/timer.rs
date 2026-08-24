@@ -2,9 +2,9 @@ use crate::bindings::{astrobox::psys_host, exports::astrobox::psys_plugin};
 use anyhow::Error;
 use serde_json::json;
 use std::time::Duration;
-use wasmtime::component::{Accessor, FutureReader};
+use wasmtime::component::{Access, FutureReader};
 
-use super::{HostString, PluginCtx};
+use super::{AccessExt, HostString, PluginCtx};
 
 enum TimerKind {
     Timeout,
@@ -95,18 +95,17 @@ async fn dispatch_timer_event(
 
 impl psys_host::timer::Host for PluginCtx {}
 
-impl psys_host::timer::HostWithStore for PluginCtx {
-    fn set_timeout<T>(
-        accessor: &Accessor<T, Self>,
+impl<T> psys_host::timer::HostWithStore<T> for PluginCtx {
+    fn set_timeout(
+        mut accessor: Access<'_, T, Self>,
         delay_ms: u64,
         payload: HostString,
-    ) -> impl core::future::Future<Output = FutureReader<u64>> + Send {
-        let instance = accessor.instance();
+    ) -> FutureReader<u64> {
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let generation = accessor.with(|mut access| access.get().runtime_generation());
         let register_state = accessor.with(|mut access| access.get().register_state());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let timer_id = register_state.next_timer_id();
                 let payload = payload.to_string();
                 let timer_state = register_state.clone();
@@ -123,20 +122,19 @@ impl psys_host::timer::HostWithStore for PluginCtx {
                 Ok::<u64, Error>(timer_id)
             })
         });
-        async move { future }
+        future
     }
 
-    fn set_interval<T>(
-        accessor: &Accessor<T, Self>,
+    fn set_interval(
+        mut accessor: Access<'_, T, Self>,
         interval_ms: u64,
         payload: HostString,
-    ) -> impl core::future::Future<Output = FutureReader<u64>> + Send {
-        let instance = accessor.instance();
+    ) -> FutureReader<u64> {
         let plugin_name = accessor.with(|mut access| access.get().plugin_name().to_string());
         let generation = accessor.with(|mut access| access.get().runtime_generation());
         let register_state = accessor.with(|mut access| access.get().register_state());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 let timer_id = register_state.next_timer_id();
                 let payload = payload.to_string();
                 let plugin_name = plugin_name.clone();
@@ -162,21 +160,17 @@ impl psys_host::timer::HostWithStore for PluginCtx {
                 Ok::<u64, Error>(timer_id)
             })
         });
-        async move { future }
+        future
     }
 
-    fn clear_timer<T>(
-        accessor: &Accessor<T, Self>,
-        timer_id: u64,
-    ) -> impl core::future::Future<Output = FutureReader<()>> + Send {
-        let instance = accessor.instance();
+    fn clear_timer(mut accessor: Access<'_, T, Self>, timer_id: u64) -> FutureReader<()> {
         let register_state = accessor.with(|mut access| access.get().register_state());
         let future = accessor.with(|mut access| {
-            FutureReader::new(instance, &mut access, async move {
+            crate::api::host::new_future_reader!(&mut access, async move {
                 register_state.clear_timer(timer_id);
                 Ok::<(), Error>(())
             })
         });
-        async move { future }
+        future
     }
 }
