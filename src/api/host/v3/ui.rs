@@ -26,13 +26,13 @@ pub struct Element {
 }
 
 #[derive(Clone, Serialize)]
-struct EventListener {
+pub(crate) struct EventListener {
     id: String,
     event: Event,
 }
 
 #[derive(Clone, Serialize)]
-enum Event {
+pub(crate) enum Event {
     CLICK,
     HOVER,
     CHANGE,
@@ -73,7 +73,7 @@ impl Into<Event> for psys_host::ui_v3::Event {
     }
 }
 #[derive(Clone, Serialize)]
-enum ElementType {
+pub(crate) enum ElementType {
     BUTTON,
     INPUT,
     TEXTAREA,
@@ -194,7 +194,49 @@ impl Into<ElementType> for psys_host::ui_v3::ElementType {
 }
 
 impl Element {
-    fn new(type_: ElementType, content: Option<String>) -> Self {
+    // ---- 与 wasmtime 版本无关的访问器 ----
+    //
+    // Element 本身是纯数据结构，Level 2/3（wasmtime 38）和 Level 4（wasmtime 48）
+    // 共用同一份。字段是私有的，所以跨模块的构建器实现通过下面这几个方法改它，
+    // 避免把字段暴露出去、也避免为 Level 4 再复制一份结构体。
+
+    pub(crate) fn set_style(&mut self, key: &'static str, value: String) {
+        let _ = self.styles.insert(key, value);
+    }
+
+    pub(crate) fn set_content(&mut self, content: Option<String>) {
+        self.content = content;
+    }
+
+    pub(crate) fn set_prop(&mut self, name: String, value: String) {
+        let _ = self.props.insert(name, value);
+    }
+
+    /// 像素宽度。`None` 表示用的是百分比等非像素值（与 `set_style("width", ..)` 配合）。
+    pub(crate) fn set_width_px(&mut self, width: Option<u32>) {
+        self.width = width;
+    }
+
+    pub(crate) fn set_height_px(&mut self, height: Option<u32>) {
+        self.height = height;
+    }
+
+    pub(crate) fn set_without_default_styles(&mut self) {
+        self.without_default_styles = true;
+    }
+
+    pub(crate) fn push_child(&mut self, child: Element) {
+        match &mut self.children {
+            Some(children) => children.push(child),
+            None => self.children = Some(vec![child]),
+        }
+    }
+
+    pub(crate) fn push_event_listener(&mut self, event: Event, id: String) {
+        self.event_listeners.push(EventListener { id, event });
+    }
+
+    pub(crate) fn new(type_: ElementType, content: Option<String>) -> Self {
         Self {
             id: rand::rng()
                 .sample_iter(Alphanumeric)
@@ -304,14 +346,14 @@ fn clamp_dimension(value: f64) -> u32 {
 
 const RENDER_SIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(800);
 
-async fn fetch_render_size(
+/// 与 wasmtime 版本无关的渲染区域尺寸查询，返回 `(width, height)`。
+///
+/// Level 4 用的是自己那套 bindgen 类型（`RenderSize` 不是同一个类型），所以真正
+/// 的查询逻辑放在这里共用，两边各自把元组包成自己的 record。
+pub(crate) async fn fetch_render_size_raw(
     app_handle: &AppHandle,
     plugin_name: String,
-) -> psys_host::ui_v3::RenderSize {
-    let zero = psys_host::ui_v3::RenderSize {
-        width: 0,
-        height: 0,
-    };
+) -> (u32, u32) {
     let payload = RenderSizeRequest {
         plugin: plugin_name.clone(),
     };
@@ -321,22 +363,27 @@ async fn fetch_render_size(
         payload,
     );
     match tokio::time::timeout(RENDER_SIZE_TIMEOUT, request).await {
-        Ok(Ok(resp)) => psys_host::ui_v3::RenderSize {
-            width: clamp_dimension(resp.width),
-            height: clamp_dimension(resp.height),
-        },
+        Ok(Ok(resp)) => (clamp_dimension(resp.width), clamp_dimension(resp.height)),
         Ok(Err(err)) => {
             log::warn!(
                 "[plugin:{}] failed to query ui render size: {err}",
                 plugin_name
             );
-            zero
+            (0, 0)
         }
         Err(_) => {
             log::warn!("[plugin:{}] ui render size query timed out", plugin_name);
-            zero
+            (0, 0)
         }
     }
+}
+
+async fn fetch_render_size(
+    app_handle: &AppHandle,
+    plugin_name: String,
+) -> psys_host::ui_v3::RenderSize {
+    let (width, height) = fetch_render_size_raw(app_handle, plugin_name).await;
+    psys_host::ui_v3::RenderSize { width, height }
 }
 
 impl psys_host::ui_v3::HostWithStore for PluginCtx {

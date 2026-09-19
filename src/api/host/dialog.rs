@@ -68,6 +68,89 @@ pub(crate) fn abort_save_file_sessions(plugin_name: &str) {
     sessions.retain(|(owner, _), _| owner != plugin_name);
 }
 
+/// 往保存会话里写一段数据。会话按 (插件名, 会话号) 索引，跨 API Level 共用。
+pub(crate) fn save_file_write_chunk_impl(
+    plugin_name: &str,
+    session_id: u64,
+    data: &[u8],
+) -> Result<(), String> {
+    let key = (plugin_name.to_string(), session_id);
+    let write_result = {
+        let mut sessions = SAVE_FILE_SESSIONS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        match sessions.get_mut(&key) {
+            Some(session) => session.file.write_all(data),
+            None => {
+                log::warn!(
+                    "dialog::save_file_write_chunk session not found: plugin={} session_id={}",
+                    plugin_name,
+                    session_id
+                );
+                return Err("session not found".to_string());
+            }
+        }
+    };
+
+    if let Err(err) = write_result {
+        log::error!(
+            "dialog::save_file_write_chunk failed: plugin={} session_id={} err={err}",
+            plugin_name,
+            session_id
+        );
+        return Err(err.to_string());
+    }
+    Ok(())
+}
+
+/// 收尾保存会话：取出并 flush。
+pub(crate) fn save_file_finish_impl(plugin_name: &str, session_id: u64) -> Result<(), String> {
+    let key = (plugin_name.to_string(), session_id);
+    let mut session = {
+        let mut sessions = SAVE_FILE_SESSIONS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        sessions.remove(&key)
+    };
+
+    let Some(ref mut session) = session else {
+        log::warn!(
+            "dialog::save_file_finish session not found: plugin={} session_id={}",
+            plugin_name,
+            session_id
+        );
+        return Err("session not found".to_string());
+    };
+
+    if let Err(err) = session.file.flush() {
+        log::error!(
+            "dialog::save_file_finish flush failed: plugin={} session_id={} err={err}",
+            plugin_name,
+            session_id
+        );
+        return Err(err.to_string());
+    }
+    Ok(())
+}
+
+/// 放弃保存会话。
+pub(crate) fn save_file_abort_impl(plugin_name: &str, session_id: u64) {
+    let key = (plugin_name.to_string(), session_id);
+    let removed = {
+        let mut sessions = SAVE_FILE_SESSIONS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        sessions.remove(&key).is_some()
+    };
+    if !removed {
+        log::warn!(
+            "dialog::save_file_abort session not found: plugin={} session_id={}",
+            plugin_name,
+            session_id
+        );
+    }
+}
+
 impl psys_host::dialog::Host for PluginCtx {
     fn open_url(&mut self, url: HostString) -> wasmtime::Result<()> {
         let app_handle = self.app_handle();
@@ -175,32 +258,9 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                 ctx.plugin_name().to_string()
             };
             FutureReader::new(instance, &mut access, async move {
-                let key = (plugin_name.clone(), session_id);
-                let write_result = {
-                    let mut sessions = SAVE_FILE_SESSIONS
-                        .lock()
-                        .unwrap_or_else(|poison| poison.into_inner());
-                    if let Some(session) = sessions.get_mut(&key) {
-                        session.file.write_all(&data)
-                    } else {
-                        log::warn!(
-                            "dialog::save_file_write_chunk session not found: plugin={} session_id={}",
-                            plugin_name,
-                            session_id
-                        );
-                        return Ok::<core::result::Result<(), ()>, Error>(Err(()));
-                    }
-                };
-
-                if let Err(err) = write_result {
-                    log::error!(
-                        "dialog::save_file_write_chunk failed: plugin={} session_id={} err={err}",
-                        plugin_name,
-                        session_id
-                    );
-                    return Ok::<core::result::Result<(), ()>, Error>(Err(()));
-                }
-                Ok::<core::result::Result<(), ()>, Error>(Ok(()))
+                Ok::<core::result::Result<(), ()>, Error>(
+                    save_file_write_chunk_impl(&plugin_name, session_id, &data).map_err(|_| ()),
+                )
             })
         });
         async move { future }
@@ -217,33 +277,9 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                 ctx.plugin_name().to_string()
             };
             FutureReader::new(instance, &mut access, async move {
-                let key = (plugin_name.clone(), session_id);
-                let mut session = {
-                    let mut sessions = SAVE_FILE_SESSIONS
-                        .lock()
-                        .unwrap_or_else(|poison| poison.into_inner());
-                    sessions.remove(&key)
-                };
-
-                let Some(ref mut session) = session else {
-                    log::warn!(
-                        "dialog::save_file_finish session not found: plugin={} session_id={}",
-                        plugin_name,
-                        session_id
-                    );
-                    return Ok::<core::result::Result<(), ()>, Error>(Err(()));
-                };
-
-                if let Err(err) = session.file.flush() {
-                    log::error!(
-                        "dialog::save_file_finish flush failed: plugin={} session_id={} err={err}",
-                        plugin_name,
-                        session_id
-                    );
-                    return Ok::<core::result::Result<(), ()>, Error>(Err(()));
-                }
-
-                Ok::<core::result::Result<(), ()>, Error>(Ok(()))
+                Ok::<core::result::Result<(), ()>, Error>(
+                    save_file_finish_impl(&plugin_name, session_id).map_err(|_| ()),
+                )
             })
         });
         async move { future }
@@ -260,20 +296,7 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
                 ctx.plugin_name().to_string()
             };
             FutureReader::new(instance, &mut access, async move {
-                let key = (plugin_name.clone(), session_id);
-                let removed = {
-                    let mut sessions = SAVE_FILE_SESSIONS
-                        .lock()
-                        .unwrap_or_else(|poison| poison.into_inner());
-                    sessions.remove(&key).is_some()
-                };
-                if !removed {
-                    log::warn!(
-                        "dialog::save_file_abort session not found: plugin={} session_id={}",
-                        plugin_name,
-                        session_id
-                    );
-                }
+                save_file_abort_impl(&plugin_name, session_id);
                 Ok::<(), Error>(())
             })
         });
@@ -281,7 +304,7 @@ impl psys_host::dialog::HostWithStore for PluginCtx {
     }
 }
 
-async fn show_system_alert(
+pub(crate) async fn show_system_alert(
     app_handle: AppHandle,
     plugin_name: String,
     info: psys_host::dialog::DialogInfo,
@@ -370,7 +393,7 @@ fn plugin_window_label(plugin_name: &str) -> String {
     format!("{PLUGIN_WINDOW_LABEL_PREFIX}{hash:016x}")
 }
 
-async fn show_website_dialog(
+pub(crate) async fn show_website_dialog(
     app_handle: AppHandle,
     plugin_name: String,
     dialog_type: psys_host::dialog::DialogType,
@@ -395,7 +418,7 @@ async fn show_website_dialog(
     }
 }
 
-async fn pick_file_with_dialog(
+pub(crate) async fn pick_file_with_dialog(
     app_handle: AppHandle,
     plugin_root: std::path::PathBuf,
     config: psys_host::dialog::PickConfig,
@@ -523,7 +546,7 @@ fn configure_file_dialog_builder<R: tauri::Runtime>(
     builder
 }
 
-async fn save_file_start_with_dialog(
+pub(crate) async fn save_file_start_with_dialog(
     app_handle: AppHandle,
     plugin_name: String,
     filter: psys_host::dialog::FilterConfig,
@@ -612,7 +635,7 @@ fn resolve_dialog_result(result: MessageDialogResult, buttons: &[ButtonSpec]) ->
     clicked.into()
 }
 
-fn default_dialog_result() -> psys_host::dialog::DialogResult {
+pub(crate) fn default_dialog_result() -> psys_host::dialog::DialogResult {
     psys_host::dialog::DialogResult {
         clicked_btn_id: HostString::default(),
         input_result: HostString::default(),

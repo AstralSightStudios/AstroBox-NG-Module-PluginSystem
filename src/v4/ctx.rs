@@ -1,19 +1,29 @@
+//! Level 4 的 Store 数据。
+//!
+//! 结构与 Level 2/3 的 `crate::api::host::PluginCtx` 对齐，但所有 wasmtime 类型
+//! 都来自 48.x，因此必须是独立的一份，不能复用。
+//!
+//! 注意 `PluginRegisterState` 是**共享**的：注册表里存的是 Level 2/3 的 bindgen
+//! 类型（`TransportRecvFiler` / `ProviderType` / `CardType`），Level 4 在注册时把
+//! 自己的枚举转过去。这样 `PluginManager` 不用关心插件是哪个 API Level。
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauri::AppHandle;
+use wasmtime_v4 as wasmtime;
+
 use wasmtime::component::ResourceTable;
 use wasmtime::{StoreLimits, StoreLimitsBuilder};
-use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
-use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
+use wasmtime_wasi_http_v4::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
+use wasmtime_wasi_v4::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::plugin::PluginRegisterState;
+use crate::v4::http_server::{HttpDispatch, HttpServerRegistry};
+use tokio::sync::mpsc;
 
-pub(crate) type HostVec<T> = wasmtime::component::__internal::Vec<T>;
-pub(crate) type HostString = wasmtime::component::__internal::String;
-
-pub struct PluginCtx {
-    table: ResourceTable,
+pub struct PluginCtxV4 {
+    pub(crate) table: ResourceTable,
     wasi_ctx: WasiCtx,
     http_ctx: WasiHttpCtx,
     app_handle: AppHandle,
@@ -23,10 +33,12 @@ pub struct PluginCtx {
     permissions: Arc<Vec<String>>,
     runtime_generation: u64,
     store_limits: StoreLimits,
+    http_servers: Arc<HttpServerRegistry>,
+    http_dispatch_tx: mpsc::UnboundedSender<HttpDispatch>,
 }
 
-impl PluginCtx {
-    pub fn new(
+impl PluginCtxV4 {
+    pub(crate) fn new(
         wasi_ctx: WasiCtx,
         app_handle: AppHandle,
         plugin_root: PathBuf,
@@ -34,6 +46,8 @@ impl PluginCtx {
         register_state: Arc<PluginRegisterState>,
         permissions: Arc<Vec<String>>,
         runtime_generation: u64,
+        http_servers: Arc<HttpServerRegistry>,
+        http_dispatch_tx: mpsc::UnboundedSender<HttpDispatch>,
     ) -> Self {
         Self {
             table: ResourceTable::new(),
@@ -52,7 +66,17 @@ impl PluginCtx {
                 .tables(256)
                 .memories(256)
                 .build(),
+            http_servers,
+            http_dispatch_tx,
         }
+    }
+
+    pub(crate) fn http_servers(&self) -> Arc<HttpServerRegistry> {
+        Arc::clone(&self.http_servers)
+    }
+
+    pub(crate) fn http_dispatch_tx(&self) -> mpsc::UnboundedSender<HttpDispatch> {
+        self.http_dispatch_tx.clone()
     }
 
     pub(crate) fn app_handle(&self) -> AppHandle {
@@ -67,6 +91,7 @@ impl PluginCtx {
         self.plugin_name.as_str()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn plugin_root(&self) -> &PathBuf {
         &self.plugin_root
     }
@@ -84,7 +109,7 @@ impl PluginCtx {
     }
 }
 
-impl WasiView for PluginCtx {
+impl WasiView for PluginCtxV4 {
     fn ctx(&mut self) -> WasiCtxView<'_> {
         WasiCtxView {
             ctx: &mut self.wasi_ctx,
@@ -93,33 +118,16 @@ impl WasiView for PluginCtx {
     }
 }
 
-impl WasiHttpView for PluginCtx {
-    fn table(&mut self) -> &mut ResourceTable {
-        &mut self.table
-    }
-
-    fn ctx(&mut self) -> &mut WasiHttpCtx {
-        &mut self.http_ctx
+impl WasiHttpView for PluginCtxV4 {
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
+            ctx: &mut self.http_ctx,
+            table: &mut self.table,
+            hooks: wasmtime_wasi_http_v4::default_hooks(),
+        }
     }
 }
 
-impl wasmtime::component::HasData for PluginCtx {
-    type Data<'a> = &'a mut PluginCtx;
+impl wasmtime::component::HasData for PluginCtxV4 {
+    type Data<'a> = &'a mut PluginCtxV4;
 }
-
-mod clipboard;
-mod device;
-pub(crate) mod dialog;
-pub(crate) mod event;
-mod i18n;
-pub(crate) mod interconnect;
-mod os;
-pub(crate) mod permission;
-mod provider_callback;
-mod queue;
-mod register;
-pub(crate) mod thirdpartyapp;
-pub(crate) mod timer;
-pub(crate) mod transport;
-pub mod ui;
-pub mod v3;

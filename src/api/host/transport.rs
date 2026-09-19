@@ -16,15 +16,15 @@ use super::{
     permission::{check_permission_declared, resolve_device_name},
 };
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
-fn decode_pb_packet(data: &[u8]) -> Result<WearPacket, ()> {
+pub(crate) fn decode_pb_packet(data: &[u8]) -> Result<WearPacket, ()> {
     WearPacket::decode(data).map_err(|err| {
         log::warn!("[pluginsystem] invalid Xiaomi protobuf packet: {}", err);
     })
 }
 
-async fn transport_protocol_supported(device_addr: &str) -> bool {
+pub(crate) async fn transport_protocol_supported(device_addr: &str) -> bool {
     let device_addr = device_addr.to_string();
     corelib::ecs::with_rt_mut(move |rt| {
         rt.component_ref::<XiaomiDevice>(&device_addr)
@@ -34,7 +34,7 @@ async fn transport_protocol_supported(device_addr: &str) -> bool {
     .await
 }
 
-async fn send_xiaomi_pb_packet(device_addr: &str, packet: WearPacket) -> Result<(), ()> {
+pub(crate) async fn send_xiaomi_pb_packet(device_addr: &str, packet: WearPacket) -> Result<(), ()> {
     let device_addr = device_addr.to_string();
     corelib::ecs::with_rt_mut(move |rt| {
         rt.with_device_mut(&device_addr, |world, entity| {

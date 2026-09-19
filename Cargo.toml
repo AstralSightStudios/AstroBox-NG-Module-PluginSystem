@@ -30,7 +30,9 @@ base64 = "0.22"
 pb = { path = "../pb" }
 prost = "0.14.1"
 
-# Wasmtime
+# Wasmtime —— API Level 2/3 运行时（WASI p2）。
+# 这一份保持不动：`[patch.crates-io]` 里的 wasmtime-internal-fiber fork 只匹配
+# 38.0.4，旧插件的二进制兼容性完全由它保证。
 wasmtime = { version = "38.0.3", features = [
     "async",
     "component-model",
@@ -43,10 +45,36 @@ hex = "0.4"
 
 # Wasmtime WASI APIs
 wasmtime-wasi-http = "38.0.3"
+
+# Wasmtime —— API Level 4 运行时（WASI p3）。
+# 与上面那份是两个 major 版本，Cargo 允许共存（wasmtime 没有 `links` 键）。
+# 48 的 aarch64 fiber 已在上游去掉 PAuth，因此这一份不需要 Android fiber patch。
+wasmtime-v4 = { package = "wasmtime", version = "48.0.2", features = [
+    "async",
+    "component-model",
+    "component-model-async",
+    "pulley",
+] }
+wasmtime-wasi-v4 = { package = "wasmtime-wasi", version = "48.0.2", features = [
+    "p2",
+    "p3",
+] }
+wasmtime-wasi-http-v4 = { package = "wasmtime-wasi-http", version = "48.0.2", features = [
+    "p2",
+    "p3",
+    "component-model-async",
+] }
+
+# Level 4 插件内建 HTTP 服务器（宿主侧监听，请求转交插件导出的 handler）
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-graceful", "http1"] }
+http-body-util = "0.1"
+
 tauri = { version = "2.11.3", features = ["rustls-tls"] }
 tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-fs = "2.5.1"
 tauri-plugin-opener = "2.5.4"
 frontbridge = { path = "../frontbridge" }
+inappbrowser = { path = "../../plugins/inappbrowser" }
 url = "2.5"

@@ -58,7 +58,7 @@ impl psys_host::interconnect::HostWithStore for PluginCtx {
     }
 }
 
-async fn send_qaic_message_impl(
+pub(crate) async fn send_qaic_message_impl(
     device_addr: String,
     pkg_name: String,
     payload: Vec<u8>,

@@ -248,7 +248,7 @@ const PLUGIN_STDIO_PENDING_LIMIT: usize = 8 * 1024;
 static PLUGIN_EXEC_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[derive(Clone, Copy)]
-enum PluginStdioKind {
+pub(crate) enum PluginStdioKind {
     Stdout,
     Stderr,
 }
@@ -284,14 +284,14 @@ impl PluginStdioKind {
 }
 
 #[derive(Clone)]
-struct PluginStdioStream {
+pub(crate) struct PluginStdioStream {
     plugin_name: Arc<str>,
     kind: PluginStdioKind,
     pending: Arc<StdMutex<Vec<u8>>>,
 }
 
 impl PluginStdioStream {
-    fn new(plugin_name: &str, kind: PluginStdioKind) -> Self {
+    pub(crate) fn new(plugin_name: &str, kind: PluginStdioKind) -> Self {
         Self {
             plugin_name: Arc::from(plugin_name.to_string()),
             kind,
@@ -574,6 +574,12 @@ pub(crate) fn purge_precompiled_component(
     plugin_dir: &Path,
     manifest: &PluginManifest,
 ) -> Result<()> {
+    // Level 4 的产物是另一份引擎编出来的，索引和文件名都独立。
+    if manifest.api_level >= 4 {
+        crate::v4::runtime::purge_precompiled_component(plugin_dir, manifest);
+        return Ok(());
+    }
+
     let root = precompile_index_root(plugin_dir);
     let entry_wasm = manifest.entry_wasm_path(plugin_dir);
     let artifact_path = precompiled_artifact_path(&entry_wasm);
@@ -593,6 +599,12 @@ pub(crate) fn purge_precompiled_component(
     }
 
     Ok(())
+}
+
+/// 仅供测试：让 v4 的冒烟测试能在同一进程里同时建两个版本的引擎。
+#[cfg(test)]
+pub(crate) fn create_engine_for_tests() -> Result<Engine> {
+    create_engine()
 }
 
 fn create_engine() -> Result<Engine> {
@@ -662,15 +674,30 @@ fn emit_pluginsystem_progress(
 pub struct PluginRuntime {
     name: String,
     api_level: u32,
-    engine: Engine,
-    component: Component,
     plugin_root: PathBuf,
     app_handle: AppHandle,
     register_state: Arc<PluginRegisterState>,
     permissions: Arc<Vec<String>>,
     generation: Arc<AtomicU64>,
+    backend: Backend,
+}
+
+/// 插件按 API Level 落在哪一套 wasm 运行时上。
+///
+/// Level 2/3 用 wasmtime 38（`Legacy`），Level 4 用 wasmtime 48（`V4`）。两者不共享
+/// 任何 wasmtime 类型，所以只能整体二选一，不能在同一个结构里混着放。
+#[derive(Clone)]
+enum Backend {
+    Legacy(Arc<LegacyBackend>),
+    V4(Arc<crate::v4::runtime::PluginRuntimeV4>),
+}
+
+/// Level 2/3 的后端状态。
+struct LegacyBackend {
+    engine: Engine,
+    component: Component,
     _epoch_owner: Arc<()>,
-    instance: Arc<Mutex<Option<PluginInstance>>>,
+    instance: Mutex<Option<PluginInstance>>,
 }
 
 enum PluginInstance {
@@ -720,6 +747,24 @@ impl<D> FutureConsumer<D> for DrainUnitFuture {
     }
 }
 
+/// Level 2/3 的事件枚举映射到 Level 4 的同名枚举。
+///
+/// 两边变体一一对应，派发入口统一收 v2 枚举，避免上层按 API Level 分叉。
+fn map_event_type_to_v4(
+    event_type: psys_plugin::event::EventType,
+) -> crate::v4::bindings::exports::astrobox::psys_plugin_v4::event::EventType {
+    use crate::v4::bindings::exports::astrobox::psys_plugin_v4::event::EventType as V4;
+    match event_type {
+        psys_plugin::event::EventType::PluginMessage => V4::PluginMessage,
+        psys_plugin::event::EventType::InterconnectMessage => V4::InterconnectMessage,
+        psys_plugin::event::EventType::DeviceAction => V4::DeviceAction,
+        psys_plugin::event::EventType::ProviderAction => V4::ProviderAction,
+        psys_plugin::event::EventType::DeeplinkAction => V4::DeeplinkAction,
+        psys_plugin::event::EventType::TransportPacket => V4::TransportPacket,
+        psys_plugin::event::EventType::Timer => V4::Timer,
+    }
+}
+
 impl PluginRuntime {
     fn normalize_permissions(raw: &[String]) -> Vec<String> {
         raw.iter()
@@ -757,30 +802,66 @@ impl PluginRuntime {
         }
 
         let plugin_name = manifest.name.clone();
+        let register_state = Arc::new(PluginRegisterState::new());
+        let permissions = Arc::new(Self::normalize_permissions(&manifest.permissions));
 
-        log::info!("[plugin:{}] Creating wasmtime engine...", plugin_name);
-        let engine = create_engine()?;
+        // Level 4 起换到另一份 wasmtime（48.x / WASI p3），连引擎和预编译产物都是
+        // 独立的，这里必须在最外层就分流，不能先建一个 38.x 引擎再说。
+        let backend = if manifest.api_level >= 4 {
+            Backend::V4(Arc::new(crate::v4::runtime::PluginRuntimeV4::initialise(
+                path,
+                manifest,
+                app_handle.clone(),
+                Arc::clone(&register_state),
+                Arc::clone(&permissions),
+            )?))
+        } else {
+            log::info!("[plugin:{}] Creating wasmtime engine...", plugin_name);
+            let engine = create_engine()?;
 
-        log::info!("[plugin:{}] Ensuring precompiled component...", plugin_name);
-        let artifact_path = ensure_precompiled_component(&engine, path, manifest, &entry_path)?;
+            log::info!("[plugin:{}] Ensuring precompiled component...", plugin_name);
+            let artifact_path = ensure_precompiled_component(&engine, path, manifest, &entry_path)?;
 
-        log::info!("[plugin:{}] Loading precompiled component...", plugin_name);
-        let component = load_precompiled_component(&engine, &artifact_path)?;
+            log::info!("[plugin:{}] Loading precompiled component...", plugin_name);
+            let component = load_precompiled_component(&engine, &artifact_path)?;
 
-        let epoch_owner = register_epoch_engine(&engine);
+            let epoch_owner = register_epoch_engine(&engine);
+            Backend::Legacy(Arc::new(LegacyBackend {
+                engine,
+                component,
+                _epoch_owner: epoch_owner,
+                instance: Mutex::new(None),
+            }))
+        };
+
         Ok(Self {
             name: plugin_name,
             api_level: manifest.api_level,
-            engine,
-            component,
             plugin_root: path.to_path_buf(),
             app_handle,
-            register_state: Arc::new(PluginRegisterState::new()),
-            permissions: Arc::new(Self::normalize_permissions(&manifest.permissions)),
+            register_state,
+            permissions,
             generation: Arc::new(AtomicU64::new(0)),
-            _epoch_owner: epoch_owner,
-            instance: Arc::new(Mutex::new(None)),
+            backend,
         })
+    }
+
+    /// 取 Level 2/3 的后端；Level 4 插件走到这里说明分派逻辑写错了。
+    fn legacy(&self) -> Result<&LegacyBackend> {
+        match &self.backend {
+            Backend::Legacy(backend) => Ok(backend),
+            Backend::V4(_) => Err(anyhow::anyhow!(
+                "Plugin '{}' runs on the api level 4 runtime; legacy path is unavailable",
+                self.name
+            )),
+        }
+    }
+
+    fn v4(&self) -> Option<&Arc<crate::v4::runtime::PluginRuntimeV4>> {
+        match &self.backend {
+            Backend::V4(runtime) => Some(runtime),
+            Backend::Legacy(_) => None,
+        }
     }
 
     fn build_wasi_ctx(&self) -> Result<WasiCtx> {
@@ -803,7 +884,7 @@ impl PluginRuntime {
     fn create_store(&self, generation: u64) -> Result<Store<PluginCtx>> {
         let wasi_ctx = self.build_wasi_ctx()?;
         let mut store = Store::new(
-            &self.engine,
+            &self.legacy()?.engine,
             PluginCtx::new(
                 wasi_ctx,
                 self.app_handle.clone(),
@@ -820,7 +901,7 @@ impl PluginRuntime {
     }
 
     fn build_linker(&self) -> Result<Linker<PluginCtx>> {
-        let mut linker = Linker::new(&self.engine);
+        let mut linker = Linker::new(&self.legacy()?.engine);
         p2::add_to_linker_async(&mut linker)
             .context("Failed to register the WASI interface with Linker")?;
 
@@ -837,6 +918,15 @@ impl PluginRuntime {
         let generation = NEXT_PLUGIN_GENERATION.fetch_add(1, Ordering::Relaxed);
         self.generation.store(generation, Ordering::Release);
         self.register_state.reset_runtime_state().await;
+
+        if let Some(v4) = self.v4() {
+            log::info!("[plugin:{}] Starting api level 4 runtime...", self.name);
+            self.emit_progress("instantiate", None);
+            v4.run(generation).await?;
+            self.emit_progress("on_load", None);
+            return Ok(());
+        }
+
         log::info!("[plugin:{}] Creating store...", self.name.clone());
         self.emit_progress("create_store", None);
         let mut store = self.create_store(generation)?;
@@ -847,12 +937,12 @@ impl PluginRuntime {
         log::info!("[plugin:{}] Instantiating world...", self.name.clone());
         self.emit_progress("instantiate", None);
         {
-            let mut guard = self.instance.lock().await;
+            let mut guard = self.legacy()?.instance.lock().await;
             *guard = None;
         }
         let _exec = PLUGIN_EXEC_LOCK.lock().await;
         if self.api_level >= 3 {
-            let instance = PsysWorldV3::instantiate_async(&mut store, &self.component, &linker)
+            let instance = PsysWorldV3::instantiate_async(&mut store, &self.legacy()?.component, &linker)
                 .await
                 .map_err(|e| {
                     anyhow::anyhow!(
@@ -870,7 +960,7 @@ impl PluginRuntime {
                 .await
                 .context("Failed to execute the plugin on-load callback")?;
 
-            let mut guard = self.instance.lock().await;
+            let mut guard = self.legacy()?.instance.lock().await;
             *guard = Some(PluginInstance::V3 {
                 store,
                 world: instance,
@@ -878,7 +968,7 @@ impl PluginRuntime {
             return Ok(());
         }
 
-        let instance = PsysWorld::instantiate_async(&mut store, &self.component, &linker)
+        let instance = PsysWorld::instantiate_async(&mut store, &self.legacy()?.component, &linker)
             .await
             .map_err(|e| {
                 anyhow::anyhow!(
@@ -896,7 +986,7 @@ impl PluginRuntime {
             .await
             .context("Failed to execute the plugin on-load callback")?;
 
-        let mut guard = self.instance.lock().await;
+        let mut guard = self.legacy()?.instance.lock().await;
         *guard = Some(PluginInstance::V2 {
             store,
             world: instance,
@@ -951,6 +1041,39 @@ impl PluginRuntime {
         }
     }
 
+    /// 换插件目录（热重载/安装后改名）。Level 4 的实例也要跟着换。
+    pub(crate) fn relocate(&mut self, path: PathBuf) {
+        self.plugin_root = path.clone();
+        if let Backend::V4(runtime) = &mut self.backend {
+            if let Some(runtime) = Arc::get_mut(runtime) {
+                runtime.relocate(path);
+            }
+        }
+    }
+
+    fn map_ui_event_to_api4(
+        event: &str,
+    ) -> Option<crate::v4::bindings::astrobox::psys_host_v4::ui::Event> {
+        use crate::v4::bindings::astrobox::psys_host_v4::ui::Event as E;
+        match Self::compact_ui_event(event).as_str() {
+            "CLICK" => Some(E::Click),
+            "HOVER" => Some(E::Hover),
+            "CHANGE" => Some(E::Change),
+            "INPUT" => Some(E::Input),
+            "FOCUS" => Some(E::Focus),
+            "BLUR" => Some(E::Blur),
+            "MOUSEENTER" => Some(E::MouseEnter),
+            "MOUSELEAVE" => Some(E::MouseLeave),
+            "POINTERDOWN" => Some(E::PointerDown),
+            "POINTERUP" => Some(E::PointerUp),
+            "POINTERMOVE" => Some(E::PointerMove),
+            "KEYDOWN" => Some(E::KeyDown),
+            "KEYUP" => Some(E::KeyUp),
+            "LONGPRESS" => Some(E::LongPress),
+            _ => None,
+        }
+    }
+
     fn map_ui_event_to_api3(
         event: &str,
     ) -> Option<crate::bindings_v3::astrobox::psys_host::ui_v3::Event> {
@@ -982,8 +1105,17 @@ impl PluginRuntime {
         event_type: psys_plugin::event::EventType,
         payload: String,
     ) -> Result<()> {
+        if let Some(v4) = self.v4() {
+            return v4
+                .send(crate::v4::runtime::V4Command::Event {
+                    event_type: map_event_type_to_v4(event_type),
+                    payload,
+                })
+                .await;
+        }
+
         let _exec = PLUGIN_EXEC_LOCK.lock().await;
-        let mut guard = self.instance.lock().await;
+        let mut guard = self.legacy()?.instance.lock().await;
         let instance = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
@@ -1048,8 +1180,14 @@ impl PluginRuntime {
     }
 
     pub async fn dispatch_ui_render(&self, element_id: String) -> Result<()> {
+        if let Some(v4) = self.v4() {
+            return v4
+                .send(crate::v4::runtime::V4Command::UiRender { element_id })
+                .await;
+        }
+
         let _exec = PLUGIN_EXEC_LOCK.lock().await;
-        let mut guard = self.instance.lock().await;
+        let mut guard = self.legacy()?.instance.lock().await;
         let instance = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
@@ -1088,8 +1226,16 @@ impl PluginRuntime {
     }
 
     pub async fn dispatch_card_render(&self, element_id: String) -> Result<()> {
+        if let Some(v4) = self.v4() {
+            return v4
+                .send(crate::v4::runtime::V4Command::CardRender {
+                    card_id: element_id,
+                })
+                .await;
+        }
+
         let _exec = PLUGIN_EXEC_LOCK.lock().await;
-        let mut guard = self.instance.lock().await;
+        let mut guard = self.legacy()?.instance.lock().await;
         let instance = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
@@ -1134,7 +1280,7 @@ impl PluginRuntime {
         payload: String,
     ) -> Result<()> {
         let _exec = PLUGIN_EXEC_LOCK.lock().await;
-        let mut guard = self.instance.lock().await;
+        let mut guard = self.legacy()?.instance.lock().await;
         let instance = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
@@ -1167,7 +1313,7 @@ impl PluginRuntime {
         payload: String,
     ) -> Result<()> {
         let _exec = PLUGIN_EXEC_LOCK.lock().await;
-        let mut guard = self.instance.lock().await;
+        let mut guard = self.legacy()?.instance.lock().await;
         let instance = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Plugin '{}' instance is not initialized", self.name))?;
@@ -1200,6 +1346,22 @@ impl PluginRuntime {
         payload: String,
     ) -> Result<()> {
         let normalized = Self::normalize_ui_event_name(&event);
+        if let Some(v4) = self.v4() {
+            let mapped = Self::map_ui_event_to_api4(&normalized).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Unknown ui event type for api_level={}: {}",
+                    self.api_level,
+                    normalized
+                )
+            })?;
+            return v4
+                .send(crate::v4::runtime::V4Command::UiEvent {
+                    event_id,
+                    event: mapped,
+                    payload,
+                })
+                .await;
+        }
         if self.api_level >= 3 {
             let mapped = Self::map_ui_event_to_api3(&normalized).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1310,9 +1472,12 @@ impl PluginRuntime {
         crate::transport_runtime::cancel_request_waiters(&self.name, self.generation());
         crate::api::host::dialog::abort_save_file_sessions(&self.name);
 
-        let mut guard = self.instance.lock().await;
-        *guard = None;
-        drop(guard);
+        if let Some(v4) = self.v4() {
+            v4.stop().await;
+        } else if let Ok(legacy) = self.legacy() {
+            let mut guard = legacy.instance.lock().await;
+            *guard = None;
+        }
         self.register_state.reset_runtime_state().await;
     }
 }
@@ -1353,7 +1518,7 @@ impl Plugin {
 
     pub fn relocate(&mut self, path: PathBuf) {
         self.path = path.clone();
-        self.runtime.plugin_root = path;
+        self.runtime.relocate(path);
     }
 
     pub async fn run(&mut self) -> Result<()> {

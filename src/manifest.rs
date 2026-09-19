@@ -30,7 +30,7 @@ pub struct PluginManifest {
 }
 
 impl PluginManifest {
-    pub const SUPPORTED_API_LEVELS: &'static [u32] = &[2, 3];
+    pub const SUPPORTED_API_LEVELS: &'static [u32] = &[2, 3, 4];
 
     pub fn validate(&self, manifest_path: &Path) -> Result<()> {
         // 统一用 trim 后的名字校验：Windows Win32 会规范化尾随点/空格，

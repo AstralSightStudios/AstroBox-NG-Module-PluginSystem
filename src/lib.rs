@@ -123,6 +123,7 @@ pub mod manifest;
 pub mod plugin;
 pub mod provider_action_bridge;
 mod transport_runtime;
+mod v4;
 
 pub const PLUGINSYSTEM_READY_EVENT: &str = "astrobox://pluginsystem/ready";
 pub const PLUGINSYSTEM_PROGRESS_EVENT: &str = "astrobox://pluginsystem/progress";

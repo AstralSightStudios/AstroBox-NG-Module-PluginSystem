@@ -43,11 +43,22 @@ impl psys_host::watchface::HostWithStore for PluginCtx {
                     >(Err(()));
                 }
 
-                match get_watchface_list_impl(addr).await {
-                    Ok(list) => Ok::<
-                        core::result::Result<HostVec<psys_host::watchface::WatchfaceInfo>, ()>,
-                        Error,
-                    >(Ok(list)),
+                match get_watchface_list_raw(addr).await {
+                    Ok(list) => {
+                        let mut host_list: HostVec<psys_host::watchface::WatchfaceInfo> =
+                            HostVec::new();
+                        for item in list {
+                            host_list.push(psys_host::watchface::WatchfaceInfo {
+                                id: item.id,
+                                name: item.name,
+                                is_current: item.is_current,
+                            });
+                        }
+                        Ok::<
+                            core::result::Result<HostVec<psys_host::watchface::WatchfaceInfo>, ()>,
+                            Error,
+                        >(Ok(host_list))
+                    }
                     Err(err) => {
                         error!("Failed to fetch watchface list: {err:?}");
                         Ok::<
@@ -103,9 +114,10 @@ impl psys_host::watchface::HostWithStore for PluginCtx {
     }
 }
 
-async fn get_watchface_list_impl(
+/// 取表盘列表，返回 corelib 原生条目，供各 API Level 各自转换。
+pub(crate) async fn get_watchface_list_raw(
     device_addr: String,
-) -> Result<HostVec<psys_host::watchface::WatchfaceInfo>, Error> {
+) -> Result<Vec<pb::xiaomi::protocol::WatchFaceItem>, Error> {
     let device_addr_for_lookup = device_addr.clone();
     let rx = corelib::ecs::with_rt_mut(move |rt| -> Result<_, Error> {
         let addr_for_error = device_addr_for_lookup.clone();
@@ -123,18 +135,10 @@ async fn get_watchface_list_impl(
         .await
         .map_err(|err| anyhow!("Watchface list response not received: {err:?}"))??;
 
-    let mut host_list: HostVec<psys_host::watchface::WatchfaceInfo> = HostVec::new();
-    for item in list {
-        host_list.push(psys_host::watchface::WatchfaceInfo {
-            id: item.id,
-            name: item.name,
-            is_current: item.is_current,
-        });
-    }
-    Ok(host_list)
+    Ok(list)
 }
 
-async fn set_current_watchface_impl(
+pub(crate) async fn set_current_watchface_impl(
     device_addr: String,
     watchface_id: String,
 ) -> Result<(), Error> {

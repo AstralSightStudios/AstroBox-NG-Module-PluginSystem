@@ -6,7 +6,7 @@ use wasmtime::component::{Accessor, FutureReader};
 
 use super::{HostString, PluginCtx};
 
-enum TimerKind {
+pub(crate) enum TimerKind {
     Timeout,
     Interval,
 }
@@ -20,7 +20,7 @@ impl TimerKind {
     }
 }
 
-fn build_timer_payload(timer_id: u64, kind: TimerKind, payload: String) -> String {
+pub(crate) fn build_timer_payload(timer_id: u64, kind: TimerKind, payload: String) -> String {
     json!({
         "timerId": timer_id,
         "kind": kind.as_str(),
@@ -29,7 +29,7 @@ fn build_timer_payload(timer_id: u64, kind: TimerKind, payload: String) -> Strin
     .to_string()
 }
 
-async fn dispatch_timer_event(
+pub(crate) async fn dispatch_timer_event(
     plugin_name: String,
     generation: u64,
     timer_id: u64,

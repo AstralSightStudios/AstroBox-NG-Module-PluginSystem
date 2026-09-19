@@ -45,7 +45,21 @@ impl psys_host::thirdpartyapp::HostWithStore for PluginCtx {
                     return Ok::<core::result::Result<(), ()>, Error>(Err(()));
                 }
 
-                match launch_qa_impl(addr, app_info, page_name).await {
+                let fingerprint = match fingerprint_to_bytes(app_info.fingerprint) {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        error!("Invalid third-party app fingerprint: {err:?}");
+                        return Ok::<core::result::Result<(), ()>, Error>(Err(()));
+                    }
+                };
+                match launch_qa_raw(
+                    addr,
+                    app_info.package_name.to_string(),
+                    fingerprint,
+                    page_name,
+                )
+                .await
+                {
                     Ok(()) => Ok::<core::result::Result<(), ()>, Error>(Ok(())),
                     Err(err) => {
                         error!("Failed to launch third-party app: {err:?}");
@@ -87,11 +101,24 @@ impl psys_host::thirdpartyapp::HostWithStore for PluginCtx {
                         Error,
                     >(Err(()));
                 }
-                match get_thirdparty_app_list_impl(addr).await {
-                    Ok(list) => Ok::<
-                        core::result::Result<HostVec<psys_host::thirdpartyapp::AppInfo>, ()>,
-                        Error,
-                    >(Ok(list)),
+                match get_thirdparty_app_list_raw(addr).await {
+                    Ok(list) => {
+                        let mut host_list: HostVec<psys_host::thirdpartyapp::AppInfo> =
+                            HostVec::new();
+                        for item in list {
+                            host_list.push(psys_host::thirdpartyapp::AppInfo {
+                                package_name: item.package_name,
+                                fingerprint: fingerprint_to_host(item.fingerprint),
+                                version_code: item.version_code,
+                                can_remove: item.can_remove,
+                                app_name: item.app_name,
+                            });
+                        }
+                        Ok::<
+                            core::result::Result<HostVec<psys_host::thirdpartyapp::AppInfo>, ()>,
+                            Error,
+                        >(Ok(host_list))
+                    }
                     Err(err) => {
                         error!("Failed to fetch third-party app list: {err:?}");
                         Ok::<
@@ -106,12 +133,14 @@ impl psys_host::thirdpartyapp::HostWithStore for PluginCtx {
     }
 }
 
-async fn launch_qa_impl(
+/// 启动快应用。指纹传空则按包名从设备组件里补齐。
+pub(crate) async fn launch_qa_raw(
     device_addr: String,
-    app_info: psys_host::thirdpartyapp::AppInfo,
+    package_name: String,
+    fingerprint: Vec<u8>,
     page_name: String,
 ) -> Result<(), Error> {
-    let app_info = normalize_app_info(&device_addr, app_info).await?;
+    let app_info = normalize_app_info(&device_addr, package_name, fingerprint).await?;
     corelib::ecs::with_rt_mut(move |rt| {
         rt.with_device_mut(&device_addr, |world, entity| {
             let mut system = world
@@ -125,9 +154,13 @@ async fn launch_qa_impl(
     .await
 }
 
-async fn get_thirdparty_app_list_impl(
+/// 取快应用列表，返回 corelib 原生条目。
+///
+/// 返回中性类型而不是某个 API Level 的 bindgen 类型，Level 2/3 与 Level 4 各自
+/// 在调用点转换成自己世界里的 `app-info`，逻辑只维护这一份。
+pub(crate) async fn get_thirdparty_app_list_raw(
     device_addr: String,
-) -> Result<HostVec<psys_host::thirdpartyapp::AppInfo>, Error> {
+) -> Result<Vec<pb::xiaomi::protocol::AppItem>, Error> {
     let rx = corelib::ecs::with_rt_mut(move |rt| -> Result<_, Error> {
         rt.with_device_mut(&device_addr, |world, entity| {
             let mut system = world
@@ -143,30 +176,18 @@ async fn get_thirdparty_app_list_impl(
         .await
         .map_err(|err| anyhow!("Quick app list response not received: {err:?}"))??;
 
-    let mut host_list: HostVec<psys_host::thirdpartyapp::AppInfo> = HostVec::new();
-    for item in list {
-        host_list.push(psys_host::thirdpartyapp::AppInfo {
-            package_name: item.package_name,
-            fingerprint: fingerprint_to_host(item.fingerprint),
-            version_code: item.version_code,
-            can_remove: item.can_remove,
-            app_name: item.app_name,
-        });
-    }
-
-    Ok(host_list)
+    Ok(list)
 }
 
 async fn normalize_app_info(
     device_addr: &str,
-    app_info: psys_host::thirdpartyapp::AppInfo,
+    package_name: String,
+    fingerprint: Vec<u8>,
 ) -> Result<AppInfo, Error> {
-    let package_name: String = app_info.package_name.into();
     if package_name.is_empty() {
         return Err(anyhow!("Third-party app package name is empty"));
     }
 
-    let fingerprint = fingerprint_to_bytes(app_info.fingerprint)?;
     if !fingerprint.is_empty() {
         return Ok(AppInfo {
             package_name,
@@ -205,7 +226,7 @@ async fn resolve_app_info_from_component(
     .await
 }
 
-fn fingerprint_to_bytes(fingerprint: HostVec<u32>) -> Result<Vec<u8>, Error> {
+pub(crate) fn fingerprint_to_bytes(fingerprint: HostVec<u32>) -> Result<Vec<u8>, Error> {
     let mut out = Vec::with_capacity(fingerprint.len());
     for (idx, value) in fingerprint.into_iter().enumerate() {
         let byte =
