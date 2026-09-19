@@ -68,6 +68,12 @@ wasmtime_v4::component::bindgen!({
 
         "astrobox:psys-host-v4/i18n.load-json": async | store | trappable,
 
+        "astrobox:psys-host-v4/notification.send": async | store | trappable,
+        "astrobox:psys-host-v4/notification.remove": async | store | trappable,
+
+        "astrobox:psys-host-v4/os.device-id": async | store | trappable,
+        "astrobox:psys-host-v4/account.get-current": async | store | trappable,
+
         default: trappable,
     },
     exports: {

@@ -15,5 +15,6 @@ pub(crate) mod ctx;
 pub(crate) mod engine;
 pub(crate) mod host;
 pub(crate) mod http_server;
+pub(crate) mod identity;
 pub(crate) mod runtime;
 pub(crate) mod stdio;

@@ -21,6 +21,7 @@ futures-util = "0.3"
 zip = "6.0"
 pollster = "0.4"
 corelib = { path = "../core" }
+account = { path = "../account" }
 os_info = "3.7"
 sys-locale = "0.3"
 whoami = "1.5"

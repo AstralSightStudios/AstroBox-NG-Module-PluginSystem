@@ -4,6 +4,7 @@
 //! 与版本无关的业务逻辑。凡是能共用的实现都从 `crate::api::host` 里复用，
 //! 不在这边另起一套。
 
+pub(crate) mod account;
 pub(crate) mod browser;
 pub(crate) mod clipboard;
 pub(crate) mod device;
@@ -12,6 +13,7 @@ pub(crate) mod event;
 pub(crate) mod http_server;
 pub(crate) mod i18n;
 pub(crate) mod interconnect;
+pub(crate) mod notification;
 pub(crate) mod os;
 pub(crate) mod provider_callback;
 pub(crate) mod queue;
