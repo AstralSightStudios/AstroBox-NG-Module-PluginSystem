@@ -1,10 +1,11 @@
 use anyhow::Error;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "ios")]
+use std::path::PathBuf;
 use std::{
     collections::HashMap,
     io::Write,
-    path::PathBuf,
     sync::{
         Mutex as StdMutex,
         atomic::{AtomicU64, Ordering},
@@ -33,6 +34,7 @@ struct DialogFileFilter {
     default_file_name: String,
 }
 
+#[cfg(target_os = "ios")]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FrontFilePickerPayload {
@@ -40,6 +42,7 @@ struct FrontFilePickerPayload {
     options: FrontFilePickerOptions,
 }
 
+#[cfg(target_os = "ios")]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FrontFilePickerOptions {
@@ -50,6 +53,7 @@ struct FrontFilePickerOptions {
     default_path: Option<String>,
 }
 
+#[cfg(target_os = "ios")]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FrontFilePickerFilter {
@@ -425,15 +429,18 @@ pub(crate) async fn pick_file_with_dialog(
     filter: psys_host::dialog::FilterConfig,
 ) -> Result<psys_host::dialog::PickResult, Error> {
     let filter = DialogFileFilter::from(filter);
+    #[cfg(target_os = "ios")]
     let selected = match pick_file_with_frontend(&app_handle, &filter).await {
         Ok(selected) => selected,
         Err(err) => {
             log::warn!(
-                "dialog::pick_file frontend picker failed, falling back to direct dialog: {err}"
+                "dialog::pick_file iOS frontend picker failed, falling back to direct dialog: {err}"
             );
             pick_file_with_direct_dialog(&app_handle, &filter).await
         }
     };
+    #[cfg(not(target_os = "ios"))]
+    let selected = pick_file_with_direct_dialog(&app_handle, &filter).await;
 
     let Some(file_path) = selected else {
         return Ok(psys_host::dialog::PickResult {
@@ -477,6 +484,7 @@ pub(crate) async fn pick_file_with_dialog(
     })
 }
 
+#[cfg(target_os = "ios")]
 async fn pick_file_with_frontend(
     app_handle: &AppHandle,
     filter: &DialogFileFilter,
@@ -485,8 +493,16 @@ async fn pick_file_with_frontend(
         context: "plugin:dialog.pick_file".to_string(),
         options: FrontFilePickerOptions::from(filter),
     };
-    let mut selected: Vec<String> =
-        frontbridge::invoke_frontend(app_handle, FRONT_FILE_OPEN_PICKER_METHOD, payload).await?;
+    let mut selected: Vec<String> = frontbridge::invoke_frontend_with_options(
+        app_handle,
+        FRONT_FILE_OPEN_PICKER_METHOD,
+        payload,
+        frontbridge::InvokeOptions {
+            timeout: std::time::Duration::from_secs(30 * 60),
+            ..Default::default()
+        },
+    )
+    .await?;
     if filter.multiple && selected.len() > 1 {
         log::warn!("dialog::pick_file requested multiple files, returning the first selection");
     }
@@ -498,7 +514,11 @@ async fn pick_file_with_direct_dialog(
     filter: &DialogFileFilter,
 ) -> Option<FilePath> {
     let multiple = filter.multiple;
-    let builder = configure_file_dialog_builder(app_handle.dialog().file(), filter);
+    let builder = app_handle
+        .get_webview_window("main")
+        .map(|window| window.dialog().file())
+        .unwrap_or_else(|| app_handle.dialog().file());
+    let builder = configure_file_dialog_builder(builder, filter);
 
     let (tx, rx) = oneshot::channel();
     if multiple {
@@ -709,6 +729,7 @@ impl From<psys_host::dialog::DialogButton> for ButtonSpec {
 }
 
 const WEBSITE_DIALOG_METHOD: &str = "host/dialog/show_dialog";
+#[cfg(target_os = "ios")]
 const FRONT_FILE_OPEN_PICKER_METHOD: &str = "host/file/open_picker";
 
 #[derive(Debug, Serialize)]
@@ -802,6 +823,7 @@ impl From<psys_host::dialog::FilterConfig> for DialogFileFilter {
     }
 }
 
+#[cfg(target_os = "ios")]
 impl From<&DialogFileFilter> for FrontFilePickerOptions {
     fn from(filter: &DialogFileFilter) -> Self {
         let filters = if filter.extensions.is_empty() {
@@ -822,6 +844,7 @@ impl From<&DialogFileFilter> for FrontFilePickerOptions {
     }
 }
 
+#[cfg(target_os = "ios")]
 fn build_default_picker_path(filter: &DialogFileFilter) -> Option<String> {
     match (
         filter.default_directory.trim().is_empty(),
@@ -839,6 +862,7 @@ fn build_default_picker_path(filter: &DialogFileFilter) -> Option<String> {
     }
 }
 
+#[cfg(target_os = "ios")]
 fn file_path_from_frontend(path: String) -> FilePath {
     match url::Url::parse(&path) {
         Ok(url) if url.scheme().len() != 1 => FilePath::Url(url),
