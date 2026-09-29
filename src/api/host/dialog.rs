@@ -404,10 +404,11 @@ pub(crate) async fn show_website_dialog(
     info: psys_host::dialog::DialogInfo,
 ) -> Result<psys_host::dialog::DialogResult, Error> {
     let payload = WebsiteDialogPayload::from(plugin_name, dialog_type, info);
-    match frontbridge::invoke_frontend::<WebsiteDialogResult, _>(
+    match frontbridge::invoke_frontend_with_options::<WebsiteDialogResult, _>(
         &app_handle,
         WEBSITE_DIALOG_METHOD,
         payload,
+        frontbridge::InvokeOptions::infinite(),
     )
     .await
     {
@@ -497,10 +498,7 @@ async fn pick_file_with_frontend(
         app_handle,
         FRONT_FILE_OPEN_PICKER_METHOD,
         payload,
-        frontbridge::InvokeOptions {
-            timeout: std::time::Duration::from_secs(30 * 60),
-            ..Default::default()
-        },
+        frontbridge::InvokeOptions::infinite(),
     )
     .await?;
     if filter.multiple && selected.len() > 1 {

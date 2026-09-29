@@ -1,6 +1,6 @@
 use anyhow::Error;
 use corelib::device::xiaomi::{XiaomiDevice, components::resource::ResourceComponent};
-use frontbridge::invoke_frontend;
+use frontbridge::{InvokeOptions, invoke_frontend_with_options};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::AppHandle;
@@ -28,8 +28,13 @@ async fn request_permission(
         operation: operation.clone(),
         params,
     };
-    let resp: PermissionResponsePayload =
-        invoke_frontend(app_handle, FRONT_PERMISSION_METHOD, payload).await?;
+    let resp: PermissionResponsePayload = invoke_frontend_with_options(
+        app_handle,
+        FRONT_PERMISSION_METHOD,
+        payload,
+        InvokeOptions::infinite(),
+    )
+    .await?;
     Ok(resp.granted)
 }
 
