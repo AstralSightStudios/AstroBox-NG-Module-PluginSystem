@@ -638,7 +638,7 @@ impl PluginManager {
             .await
     }
 
-    pub async fn add_from_abp(&mut self, _name: &str, path: &Path) -> Result<()> {
+    pub async fn add_from_abp(&mut self, _name: &str, path: &Path) -> Result<String> {
         let package_raw = tokio::fs::read(path).await?;
         if package_raw.len() > MAX_PLUGIN_PACKAGE_BYTES {
             return Err(anyhow!(
@@ -653,8 +653,10 @@ impl PluginManager {
             let _ = fs::remove_dir_all(&staging_dir);
             return Err(err);
         }
+        let installed_name = manifest.name.clone();
         self.activate_staged_plugin(manifest.name, staging_dir)
-            .await
+            .await?;
+        Ok(installed_name)
     }
 
     pub async fn enable(&mut self, name: &String) -> bool {
