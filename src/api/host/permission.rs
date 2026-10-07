@@ -3,7 +3,7 @@ use corelib::device::xiaomi::{XiaomiDevice, components::resource::ResourceCompon
 use frontbridge::{InvokeOptions, invoke_frontend_with_options};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::AppHandle;
+use frontbridge::runtime::AppHandle;
 
 const FRONT_PERMISSION_METHOD: &str = "host/register/request_permission";
 

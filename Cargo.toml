@@ -71,7 +71,7 @@ hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-graceful", "http1"] }
 http-body-util = "0.1"
 
-tauri = { version = "2.11.3", features = ["rustls-tls"] }
+tauri = { version = "2.11.3", default-features = false, features = ["rustls-tls"] }
 tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-fs = "2.5.1"

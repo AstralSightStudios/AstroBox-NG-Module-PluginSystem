@@ -5,7 +5,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use tauri::{AppHandle, Manager};
+use frontbridge::runtime::AppHandle;
+use tauri::Manager;
 
 const ID_PREFIX: &str = "ab-install-";
 

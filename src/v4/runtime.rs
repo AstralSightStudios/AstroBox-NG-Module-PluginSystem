@@ -25,7 +25,7 @@ use futures_util::StreamExt;
 use futures_util::future::Either;
 use futures_util::stream::FuturesUnordered;
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use frontbridge::runtime::AppHandle;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use wasmtime_v4 as wasmtime;
 

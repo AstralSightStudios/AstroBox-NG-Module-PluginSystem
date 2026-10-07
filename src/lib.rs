@@ -11,7 +11,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 use std::{cell::RefCell, path::PathBuf, thread};
-use tauri::{AppHandle, Emitter};
+use frontbridge::runtime::AppHandle;
+use tauri::Emitter;
 use tokio::sync::{mpsc, oneshot};
 
 pub mod api;

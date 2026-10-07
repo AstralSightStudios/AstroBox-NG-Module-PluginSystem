@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::AppHandle;
+use frontbridge::runtime::AppHandle;
 use wasmtime_v4 as wasmtime;
 
 use wasmtime::component::ResourceTable;

@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use rand::Rng;
 use rand::distr::Alphanumeric;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use frontbridge::runtime::AppHandle;
+use tauri::Emitter;
 use wasmtime::component::{Accessor, FutureReader, Resource};
 
 use crate::bindings::astrobox::psys_host;

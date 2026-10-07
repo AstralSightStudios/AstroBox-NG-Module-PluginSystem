@@ -11,7 +11,8 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use tauri::{AppHandle, Manager};
+use frontbridge::runtime::AppHandle;
+use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, FilePath, MessageDialogButtons, MessageDialogResult};
 use tauri_plugin_fs::{FsExt, OpenOptions};
 use tauri_plugin_opener::OpenerExt;
@@ -377,7 +378,7 @@ pub(crate) async fn show_system_alert(
 fn plugin_alert_parent_window(
     app_handle: &AppHandle,
     plugin_name: &str,
-) -> Option<tauri::WebviewWindow> {
+) -> Option<frontbridge::runtime::WebviewWindow> {
     app_handle.get_webview_window(&plugin_window_label(plugin_name))
 }
 
