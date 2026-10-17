@@ -15,6 +15,7 @@ use frontbridge::runtime::AppHandle;
 use tauri::Emitter;
 use tokio::sync::{mpsc, oneshot};
 
+pub mod account_bridge;
 pub mod api;
 pub mod bindings {
     wasmtime::component::bindgen!({

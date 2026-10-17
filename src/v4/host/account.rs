@@ -31,13 +31,14 @@ impl bindings::HostWithStore<PluginCtxV4> for PluginCtxV4 {
         {
             return Ok(Err("permission denied".into()));
         }
-        let Some(provider) = account::get_account_provider("astrobox").await else {
-            return Ok(Err("AstroBox account provider is not initialized".into()));
-        };
-        Ok(match provider.public_profile().await {
+        Ok(match crate::account_bridge::current_profile().await {
             Ok(value) => Ok(value.map(to_profile)),
+            Err(err) if err == crate::account_bridge::NOT_INITIALIZED => Err(err),
             // Provider errors may contain HTTP response bodies; don't expose those to plugins.
-            Err(_) => Err("could not read account profile; session may have changed, retry".into()),
+            Err(err) => {
+                log::warn!("[plugin.account] failed to read AstroBox profile: {err}");
+                Err("could not read account profile; session may have changed, retry".into())
+            }
         })
     }
 }
