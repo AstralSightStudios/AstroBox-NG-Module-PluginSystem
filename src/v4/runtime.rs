@@ -36,6 +36,7 @@ use wasmtime_wasi_v4::{FsPerms, WasiCtx, WasiCtxBuilder};
 use crate::manifest::PluginManifest;
 use crate::plugin::PluginRegisterState;
 use crate::v4::bindings::PsysWorldV4;
+use crate::v4::bindings_canopusconnect::PsysPluginCanopusconnectExport;
 use crate::v4::bindings_http::PsysPluginHttpExport;
 use crate::v4::http_server::{HttpDispatch, HttpServerRegistry};
 use crate::v4::bindings::astrobox::psys_host_v4::ui as ui_bindings;
@@ -223,6 +224,11 @@ pub(crate) enum V4Command {
     CardRender {
         card_id: String,
     },
+    CanopusConnectMessage {
+        addr: String,
+        module: String,
+        payload: crate::v4::bindings::astrobox::psys_host_v4::canopusconnect::Payload,
+    },
 }
 
 struct DriverHandle {
@@ -373,6 +379,7 @@ impl PluginRuntimeV4 {
         let linker = self.build_linker()?;
         let component = self.component.clone();
         let plugin_name = self.name.clone();
+        let register_state = Arc::clone(&self.register_state);
 
         let (ready_tx, ready_rx) = oneshot::channel::<Result<()>>();
 
@@ -418,6 +425,13 @@ impl PluginRuntimeV4 {
                 }
             };
 
+            // CanopusConnect 消息处理导出同理：没有就是 None，`listen` 时由登记表报错。
+            let canopus_export = match PsysPluginCanopusconnectExport::new(&mut store, &instance) {
+                Ok(export) => Some(export),
+                Err(_) => None,
+            };
+            register_state.set_canopus_export(canopus_export.is_some());
+
             let result = store
                 .run_concurrent(async |accessor| {
                     // on-load 是 async func，可以直接 await 宿主接口，不必再 block_on。
@@ -437,6 +451,9 @@ impl PluginRuntimeV4 {
                     let http = http_export
                         .as_ref()
                         .map(|export| export.astrobox_psys_plugin_v4_http());
+                    let canopus = canopus_export
+                        .as_ref()
+                        .map(|export| export.astrobox_psys_plugin_v4_canopusconnect());
                     let mut in_flight = FuturesUnordered::new();
 
                     loop {
@@ -444,7 +461,7 @@ impl PluginRuntimeV4 {
                             command = cmd_rx.recv() => {
                                 let Some(command) = command else { break };
                                 in_flight.push(Either::Left(
-                                    dispatch(&plugin_name, events, accessor, command),
+                                    dispatch(&plugin_name, events, canopus, accessor, command),
                                 ));
                             }
                             request = http_rx.recv() => {
@@ -567,6 +584,7 @@ async fn dispatch_http(
 async fn dispatch(
     plugin_name: &str,
     events: &plugin_event::Guest,
+    canopus: Option<&crate::v4::bindings_canopusconnect::exports::astrobox::psys_plugin_v4::canopusconnect::Guest>,
     accessor: &wasmtime::component::Accessor<PluginCtxV4>,
     command: V4Command,
 ) {
@@ -590,6 +608,19 @@ async fn dispatch(
             events.call_on_ui_render(accessor, element_id).await
         }
         V4Command::CardRender { card_id } => events.call_on_card_render(accessor, card_id).await,
+        V4Command::CanopusConnectMessage {
+            addr,
+            module,
+            payload,
+        } => match canopus {
+            Some(canopus) => canopus.call_on_message(accessor, addr, module, payload).await,
+            None => {
+                log::debug!(
+                    "[plugin:{plugin_name}] no canopusconnect handler export; message dropped"
+                );
+                Ok(())
+            }
+        },
     };
 
     if let Err(err) = result {

@@ -10,6 +10,7 @@
 //! 生成的代码路径也能直接对上。
 
 pub(crate) mod bindings;
+pub(crate) mod bindings_canopusconnect;
 pub(crate) mod bindings_http;
 pub(crate) mod ctx;
 pub(crate) mod engine;

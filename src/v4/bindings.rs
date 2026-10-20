@@ -71,6 +71,10 @@ wasmtime_v4::component::bindgen!({
         "astrobox:psys-host-v4/notification.send": async | store | trappable,
         "astrobox:psys-host-v4/notification.remove": async | store | trappable,
 
+        "astrobox:psys-host-v4/canopusconnect.send": async | store | trappable,
+        "astrobox:psys-host-v4/canopusconnect.listen": async | store | trappable,
+        "astrobox:psys-host-v4/canopusconnect.unlisten": async | store | trappable,
+
         "astrobox:psys-host-v4/os.device-id": async | store | trappable,
         "astrobox:psys-host-v4/account.get-current": async | store | trappable,
 

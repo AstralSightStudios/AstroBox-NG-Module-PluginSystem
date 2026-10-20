@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{
     Arc, Mutex as StdMutex, OnceLock, Weak,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::task::{Context as TaskContext, Poll};
 use std::thread;
@@ -107,6 +107,13 @@ pub struct InterconnectRecvRegistration {
     pub pkg_name: String,
 }
 
+/// 插件对某台设备上某个 Canopus 模块的监听。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanopusListenRegistration {
+    pub addr: String,
+    pub module: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderRegistration {
     pub name: String,
@@ -124,6 +131,9 @@ pub struct CardRegistration {
 pub struct PluginRegisterState {
     transport_recv: Mutex<Vec<TransportRecvRegistration>>,
     interconnect_recv: Mutex<Vec<InterconnectRecvRegistration>>,
+    canopus_listen: Mutex<Vec<CanopusListenRegistration>>,
+    /// 插件导出了 `astrobox:psys-plugin-v4/canopusconnect`（每次启动由 driver 判定）。
+    canopus_export: AtomicBool,
     providers: Mutex<Vec<ProviderRegistration>>,
     cards: Mutex<Vec<CardRegistration>>,
     deeplink_registered: Mutex<bool>,
@@ -156,6 +166,32 @@ impl PluginRegisterState {
         }) {
             guard.push(registration);
         }
+    }
+
+    /// 登记一条监听；已有则返回 false。
+    pub async fn add_canopus_listen(&self, registration: CanopusListenRegistration) -> bool {
+        let mut guard = self.canopus_listen.lock().await;
+        if guard.contains(&registration) {
+            return false;
+        }
+        guard.push(registration);
+        true
+    }
+
+    /// 去掉一条监听；原本就没有则返回 false。
+    pub async fn remove_canopus_listen(&self, addr: &str, module: &str) -> bool {
+        let mut guard = self.canopus_listen.lock().await;
+        let before = guard.len();
+        guard.retain(|reg| reg.addr != addr || reg.module != module);
+        guard.len() != before
+    }
+
+    pub fn set_canopus_export(&self, exported: bool) {
+        self.canopus_export.store(exported, Ordering::Release);
+    }
+
+    pub fn has_canopus_export(&self) -> bool {
+        self.canopus_export.load(Ordering::Acquire)
     }
 
     pub async fn register_provider(&self, registration: ProviderRegistration) {
@@ -236,6 +272,25 @@ impl PluginRegisterState {
     pub async fn reset_runtime_state(&self) {
         self.transport_recv.lock().await.clear();
         self.interconnect_recv.lock().await.clear();
+        self.canopus_export.store(false, Ordering::Release);
+        // 设备那边的监听按插件计数，插件停了就要放掉；不等设备应答，免得拖慢停止。
+        let listens = std::mem::take(&mut *self.canopus_listen.lock().await);
+        if !listens.is_empty() {
+            tokio::spawn(async move {
+                for listen in listens {
+                    if let Err(err) =
+                        corelib::device::canopus::connect::unsubscribe(&listen.addr, &listen.module)
+                            .await
+                    {
+                        log::debug!(
+                            "[pluginsystem] canopusconnect unlisten '{}' on {} failed: {err}",
+                            listen.module,
+                            listen.addr
+                        );
+                    }
+                }
+            });
+        }
         self.providers.lock().await.clear();
         self.cards.lock().await.clear();
         *self.deeplink_registered.lock().await = false;
@@ -1410,6 +1465,34 @@ impl PluginRuntime {
         registrations
             .iter()
             .any(|reg| reg.addr == addr && reg.pkg_name == pkg_name)
+    }
+
+    pub async fn matches_canopus_connect(&self, addr: &str, module: &str) -> bool {
+        let registrations = self.register_state.canopus_listen.lock().await;
+        registrations
+            .iter()
+            .any(|reg| reg.addr == addr && reg.module == module)
+    }
+
+    /// Level 4 专有：只有 Level 4 插件能监听，其余插件不会有登记。
+    pub async fn dispatch_canopus_connect_message(
+        &self,
+        addr: String,
+        module: String,
+        payload: corelib::device::canopus::connect::ConnectPayload,
+    ) -> Result<()> {
+        let Some(v4) = self.v4() else {
+            return Err(anyhow::anyhow!(
+                "Plugin '{}' is not an api level 4 plugin",
+                self.name
+            ));
+        };
+        v4.send(crate::v4::runtime::V4Command::CanopusConnectMessage {
+            addr,
+            module,
+            payload: crate::v4::host::canopusconnect::from_core(payload),
+        })
+        .await
     }
 
     pub async fn matches_transport(

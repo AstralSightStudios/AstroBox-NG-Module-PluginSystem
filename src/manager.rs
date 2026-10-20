@@ -765,6 +765,35 @@ impl PluginManager {
         }
     }
 
+    /// 设备上的 Canopus 模块发来一条消息：交给监听了该设备该模块的 Level 4 插件。
+    pub async fn dispatch_canopus_connect_message(
+        &mut self,
+        addr: &str,
+        module: &str,
+        payload: corelib::device::canopus::connect::ConnectPayload,
+    ) {
+        let mut active_plugins = self
+            .plugins
+            .iter()
+            .filter(|(_, plugin)| plugin.state.loaded && !plugin.state.disabled)
+            .map(|(name, plugin)| (name.clone(), plugin.runtime.clone()))
+            .collect::<Vec<_>>();
+        active_plugins.sort_by(|left, right| left.0.cmp(&right.0));
+
+        for (name, runtime) in active_plugins {
+            if !runtime.matches_canopus_connect(addr, module).await {
+                continue;
+            }
+            // 只入队，不等插件处理完：慢插件不能拖住管理器锁，也不能挡住别的消息。
+            if let Err(err) = runtime
+                .dispatch_canopus_connect_message(addr.to_string(), module.to_string(), payload.clone())
+                .await
+            {
+                log::error!("[plugin:{name}] Failed to deliver canopusconnect message: {err}");
+            }
+        }
+    }
+
     pub async fn dispatch_transport_packet(
         &mut self,
         addr: &str,

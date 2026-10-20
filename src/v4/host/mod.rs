@@ -6,6 +6,7 @@
 
 pub(crate) mod account;
 pub(crate) mod browser;
+pub(crate) mod canopusconnect;
 pub(crate) mod clipboard;
 pub(crate) mod device;
 pub(crate) mod dialog;
