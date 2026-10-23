@@ -10,7 +10,7 @@ use std::sync::{
 };
 use std::task::{Context as TaskContext, Poll};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use corelib::device::xiaomi::packet::v2::layer2::L2Channel;
@@ -132,6 +132,8 @@ pub struct PluginRegisterState {
     transport_recv: Mutex<Vec<TransportRecvRegistration>>,
     interconnect_recv: Mutex<Vec<InterconnectRecvRegistration>>,
     canopus_listen: Mutex<Vec<CanopusListenRegistration>>,
+    /// 最近被用户/策略批准过的 CanopusConnect 操作（权限 + 设备 + 模块），见 [`Self::permission_fresh`]。
+    permission_grants: StdMutex<HashMap<String, Instant>>,
     /// 插件导出了 `astrobox:psys-plugin-v4/canopusconnect`（每次启动由 driver 判定）。
     canopus_export: AtomicBool,
     providers: Mutex<Vec<ProviderRegistration>>,
@@ -192,6 +194,29 @@ impl PluginRegisterState {
 
     pub fn has_canopus_export(&self) -> bool {
         self.canopus_export.load(Ordering::Acquire)
+    }
+
+    /// 一次批准有效这么久：导入一首歌要发上千条消息，每条都绕一圈前端询问会把传输速度压在
+    /// 前端往返上；撤销授权最迟也在这段时间之后对正在运行的插件生效。
+    const PERMISSION_TTL: Duration = Duration::from_secs(30);
+
+    /// `key` 在 [`Self::PERMISSION_TTL`] 内被批准过吗。只缓存“批准”，拒绝每次都重新问。
+    pub fn permission_fresh(&self, key: &str) -> bool {
+        let mut grants = self.permission_grants.lock().unwrap_or_else(|e| e.into_inner());
+        match grants.get(key) {
+            Some(at) if at.elapsed() < Self::PERMISSION_TTL => true,
+            Some(_) => {
+                grants.remove(key);
+                false
+            }
+            None => false,
+        }
+    }
+
+    pub fn remember_permission(&self, key: String) {
+        let mut grants = self.permission_grants.lock().unwrap_or_else(|e| e.into_inner());
+        grants.retain(|_, at| at.elapsed() < Self::PERMISSION_TTL);
+        grants.insert(key, Instant::now());
     }
 
     pub async fn register_provider(&self, registration: ProviderRegistration) {

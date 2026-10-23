@@ -635,8 +635,10 @@ impl PluginManager {
             let _ = fs::remove_dir_all(&staging_dir);
             return Err(err);
         }
+        let name = manifest.name.clone();
         self.activate_staged_plugin(manifest.name, staging_dir)
             .await
+            .inspect_err(|err| log::error!("[plugin:{}] Failed to install: {err:#}", name))
     }
 
     pub async fn add_from_abp(&mut self, _name: &str, path: &Path) -> Result<String> {
@@ -656,7 +658,10 @@ impl PluginManager {
         }
         let installed_name = manifest.name.clone();
         self.activate_staged_plugin(manifest.name, staging_dir)
-            .await?;
+            .await
+            .inspect_err(|err| {
+                log::error!("[plugin:{}] Failed to install: {err:#}", installed_name)
+            })?;
         Ok(installed_name)
     }
 

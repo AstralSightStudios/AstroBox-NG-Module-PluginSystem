@@ -100,8 +100,14 @@ async fn authorize(
             ctx.register_state(),
         )
     });
+    // A burst of sends (an import is a thousand of them) would otherwise ask the frontend about
+    // every single message.
+    let key = format!("{permission}\0{addr}\0{module}");
+    if register_state.permission_fresh(&key) {
+        return Some(register_state);
+    }
     let device_name = resolve_device_name(addr).await;
-    check_permission_declared(
+    let granted = check_permission_declared(
         &app,
         &permissions,
         permission,
@@ -112,8 +118,13 @@ async fn authorize(
             "module": module,
         }),
     )
-    .await
-    .then_some(register_state)
+    .await;
+    if granted {
+        register_state.remember_permission(key);
+        Some(register_state)
+    } else {
+        None
+    }
 }
 
 fn to_core(payload: canopusconnect::Payload) -> ConnectPayload {

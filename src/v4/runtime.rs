@@ -391,14 +391,14 @@ impl PluginRuntimeV4 {
                     Ok(instance) => instance,
                     Err(err) => {
                         let _ = ready_tx.send(Err(anyhow::anyhow!(
-                            "Failed to instantiate plugin component for api_level=4. detail: {err}"
+                            "Failed to instantiate plugin component for api_level=4. detail: {err:#}"
                         )));
                         return;
                     }
                 },
                 Err(err) => {
                     let _ = ready_tx.send(Err(anyhow::anyhow!(
-                        "Failed to link plugin component for api_level=4. detail: {err}"
+                        "Failed to link plugin component for api_level=4. detail: {err:#}"
                     )));
                     return;
                 }
@@ -408,7 +408,7 @@ impl PluginRuntimeV4 {
                 Ok(world) => world,
                 Err(err) => {
                     let _ = ready_tx.send(Err(anyhow::anyhow!(
-                        "Failed to load api level 4 world exports. detail: {err}"
+                        "Failed to load api level 4 world exports. detail: {err:#}"
                     )));
                     return;
                 }
@@ -441,7 +441,7 @@ impl PluginRuntimeV4 {
                         .await
                     {
                         let _ = ready_tx.send(Err(anyhow::anyhow!(
-                            "Failed to execute the plugin on-load callback: {err}"
+                            "Failed to execute the plugin on-load callback: {err:#}"
                         )));
                         return;
                     }
