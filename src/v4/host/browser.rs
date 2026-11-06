@@ -64,11 +64,16 @@ impl browser::HostWithStore<PluginCtxV4> for PluginCtxV4 {
             height: options.height,
         };
 
+        // 打不开时插件那边多半只是静默失败（iOS 上 Xcode 工程里那份 Swift 包过期时就是
+        // 「No command openControlled found」），宿主这里留一条日志，方便从日志里直接看出原因。
         Ok(app_handle
             .inappbrowser()
             .open_controlled(request)
             .await
-            .map_err(|err| err.to_string()))
+            .map_err(|err| {
+                log::warn!("[plugin.browser] {plugin_name}: open failed: {err}");
+                err.to_string()
+            }))
     }
 
     async fn wait_for_intercept(
