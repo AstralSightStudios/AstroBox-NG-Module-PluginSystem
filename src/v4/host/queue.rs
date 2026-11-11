@@ -4,7 +4,7 @@ use frontbridge::invoke_frontend;
 use serde_json::json;
 use wasmtime_v4 as wasmtime;
 
-use crate::api::host::permission::check_permission_declared_blocking;
+use crate::api::host::permission::check_permission_declared;
 use crate::v4::bindings::astrobox::psys_host_v4::queue;
 use crate::v4::ctx::PluginCtxV4;
 
@@ -29,19 +29,35 @@ impl queue::Host for PluginCtxV4 {
             "resourceType": res_label,
             "filePath": file_path,
         });
-        if !check_permission_declared_blocking(&app_handle, permissions.as_ref(), "queue", params) {
-            return Ok(());
-        }
-        let payload = json!({ "files": [file_path] });
-        if let Err(err) = tauri::async_runtime::block_on(async {
-            invoke_frontend::<bool, _>(&app_handle, FRONT_FILE_ADD_TO_QUEUE_METHOD, payload).await
-        }) {
-            log::warn!(
-                "[plugin:{}] failed to add resource to frontend queue: {}",
-                plugin_name,
-                err
-            );
-        }
+
+        tokio::spawn(async move {
+            if !check_permission_declared(
+                &app_handle,
+                permissions.as_ref(),
+                "queue",
+                params,
+            )
+            .await
+            {
+                return;
+            }
+
+            let payload = json!({ "files": [file_path] });
+            if let Err(err) = invoke_frontend::<bool, _>(
+                &app_handle,
+                FRONT_FILE_ADD_TO_QUEUE_METHOD,
+                payload,
+            )
+            .await
+            {
+                log::warn!(
+                    "[plugin:{}] failed to add resource to frontend queue: {}",
+                    plugin_name,
+                    err
+                );
+            }
+        });
+
         Ok(())
     }
 }
