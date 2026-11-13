@@ -98,12 +98,18 @@ pub(crate) fn resolve_plugin_file(plugin_root: &Path, relative: &str) -> Result<
     Ok(resolved)
 }
 
+/// 从插件目录移进暂存目录的文件：`staged` 是暂存后的位置，`origin` 是它在插件目录里的原位置。
+pub(crate) struct StagedFile {
+    pub(crate) staged: PathBuf,
+    pub(crate) origin: PathBuf,
+}
+
 /// 把插件目录里的文件**移**进暂存目录（同盘是改名，不复制）。跨盘改名不了才退回复制再删。
 pub(crate) async fn stage_file(
     app: &AppHandle,
     plugin_root: &Path,
     relative: &str,
-) -> Result<PathBuf, String> {
+) -> Result<StagedFile, String> {
     let source = resolve_plugin_file(plugin_root, relative)?;
     let size = tokio::fs::metadata(&source)
         .await
@@ -119,16 +125,55 @@ pub(crate) async fn stage_file(
         source.file_name().and_then(|name| name.to_str()).and_then(safe_extension).as_deref(),
     ));
     if tokio::fs::rename(&source, &target).await.is_ok() {
-        return Ok(target);
+        return Ok(StagedFile { staged: target, origin: source });
     }
-    tokio::fs::copy(&source, &target)
-        .await
-        .map_err(|err| format!("cannot move the file into the staging directory: {err}"))?;
+    if let Err(err) = tokio::fs::copy(&source, &target).await {
+        // 复制到一半的残件不能留在暂存目录里
+        remove_staged(&target).await;
+        return Err(format!("cannot move the file into the staging directory: {err}"));
+    }
     // 删不掉原件不影响这次安装：暂存副本已经是完整的
     if let Err(err) = tokio::fs::remove_file(&source).await {
         log::warn!("[pluginsystem] staged copy kept but the original could not be removed: {err}");
     }
-    Ok(target)
+    Ok(StagedFile { staged: target, origin: source })
+}
+
+/// 没能入队时把文件还给插件：放回它在插件目录里的原位置，插件改天重试不必重新下载。
+///
+/// 原位置上已经有了新文件、或者原目录不在插件目录里了（被换成了指向别处的链接），就不放回，
+/// 直接删掉暂存件——宿主只往插件自己的目录里写。
+pub(crate) async fn restore_staged(file: &StagedFile, plugin_root: &Path) {
+    let restored = async {
+        let file_name = file.origin.file_name()?;
+        let root = plugin_root.canonicalize().ok()?;
+        let parent = file.origin.parent()?.canonicalize().ok()?;
+        if !parent.starts_with(&root) {
+            return None;
+        }
+        let origin = parent.join(file_name);
+        if tokio::fs::symlink_metadata(&origin).await.is_ok() {
+            return None;
+        }
+        if tokio::fs::rename(&file.staged, &origin).await.is_ok() {
+            return Some(());
+        }
+        // 跨盘：复制回去；复制失败就把残件清掉
+        if tokio::fs::copy(&file.staged, &origin).await.is_ok() {
+            return Some(());
+        }
+        let _ = tokio::fs::remove_file(&origin).await;
+        None
+    }
+    .await;
+    if restored.is_none() {
+        log::warn!(
+            "[pluginsystem] could not put {} back into the plugin directory; dropping the staged copy",
+            file.origin.display()
+        );
+    }
+    // 改名成功时暂存件已经不在了（NotFound 不报）；其余情况都要删掉
+    remove_staged(&file.staged).await;
 }
 
 pub(crate) async fn remove_staged(path: &Path) {
@@ -394,6 +439,69 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// 模拟一次「已移进暂存目录」：返回暂存记录（原位置用规范化后的绝对路径，与 stage_file 一致）。
+    fn staged_from(root: &Path, relative: &str, staging: &Path) -> StagedFile {
+        let origin = resolve_plugin_file(root, relative).unwrap();
+        let staged = staging.join(staged_name(Some("bin")));
+        std::fs::rename(&origin, &staged).unwrap();
+        StagedFile { staged, origin }
+    }
+
+    #[tokio::test]
+    async fn a_refused_plugin_file_goes_back_where_it_came_from() {
+        let root = temp_root("restore");
+        let staging = temp_root("restore-staging");
+        std::fs::create_dir_all(root.join("downloads")).unwrap();
+        std::fs::write(root.join("downloads/face.bin"), b"face").unwrap();
+
+        let file = staged_from(&root, "downloads/face.bin", &staging);
+        assert!(!root.join("downloads/face.bin").exists());
+        restore_staged(&file, &root).await;
+        assert_eq!(std::fs::read(root.join("downloads/face.bin")).unwrap(), b"face");
+        assert!(!file.staged.exists(), "the staged copy is gone");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+
+    #[tokio::test]
+    async fn a_new_file_at_the_origin_is_not_overwritten() {
+        let root = temp_root("restore-occupied");
+        let staging = temp_root("restore-occupied-staging");
+        std::fs::write(root.join("face.bin"), b"old").unwrap();
+
+        let file = staged_from(&root, "face.bin", &staging);
+        std::fs::write(root.join("face.bin"), b"new").unwrap();
+        restore_staged(&file, &root).await;
+        assert_eq!(std::fs::read(root.join("face.bin")).unwrap(), b"new");
+        assert!(!file.staged.exists(), "the staged copy is dropped instead");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn nothing_is_written_outside_the_plugin_directory() {
+        let root = temp_root("restore-escape");
+        let staging = temp_root("restore-escape-staging");
+        let outside = temp_root("restore-escape-outside");
+        std::fs::create_dir_all(root.join("downloads")).unwrap();
+        std::fs::write(root.join("downloads/face.bin"), b"face").unwrap();
+
+        let file = staged_from(&root, "downloads/face.bin", &staging);
+        // 插件趁入队期间把原目录换成了指向外面的链接
+        std::fs::remove_dir(root.join("downloads")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("downloads")).unwrap();
+        restore_staged(&file, &root).await;
+        assert!(!outside.join("face.bin").exists(), "must not follow the link out of the plugin directory");
+        assert!(!file.staged.exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&staging);
         let _ = std::fs::remove_dir_all(&outside);
     }
 

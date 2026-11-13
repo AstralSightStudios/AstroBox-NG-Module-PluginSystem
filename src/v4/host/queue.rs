@@ -14,7 +14,9 @@ use wasmtime_v4 as wasmtime;
 use crate::api::host::permission::{check_permission_declared, resolve_device_name};
 use crate::v4::bindings::astrobox::psys_host_v4::queue;
 use crate::v4::ctx::PluginCtxV4;
-use crate::v4::host::mass::{MAX_PAYLOAD_BYTES, remove_staged, stage_bytes, stage_file};
+use crate::v4::host::mass::{
+    MAX_PAYLOAD_BYTES, remove_staged, restore_staged, stage_bytes, stage_file,
+};
 
 const FRONT_FILE_ADD_TO_QUEUE_METHOD: &str = "host/file/add_to_queue";
 const FRONT_ADD_PLUGIN_INSTALL_METHOD: &str = "host/queue/add_plugin_install";
@@ -184,18 +186,21 @@ impl queue::HostWithStore<PluginCtxV4> for PluginCtxV4 {
             return Ok(Err("permission denied".to_string()));
         }
 
+        // file 来源记下原位置：没能入队时要把文件还给插件
         let staged = match task.source {
-            queue::InstallSource::File(relative) => stage_file(&app_handle, &plugin_root, &relative).await,
+            queue::InstallSource::File(relative) => stage_file(&app_handle, &plugin_root, &relative)
+                .await
+                .map(|file| (file.staged.clone(), Some(file))),
             queue::InstallSource::Bytes(bytes) => {
                 if bytes.len() as u64 > MAX_PAYLOAD_BYTES {
                     Err("the package is too large".to_string())
                 } else {
-                    stage_bytes(&app_handle, bytes).await
+                    stage_bytes(&app_handle, bytes).await.map(|path| (path, None))
                 }
             }
         };
-        let staged = match staged {
-            Ok(path) => path,
+        let (staged, from_plugin_file) = match staged {
+            Ok(staged) => staged,
             Err(err) => return Ok(Err(err)),
         };
 
@@ -212,8 +217,11 @@ impl queue::HostWithStore<PluginCtxV4> for PluginCtxV4 {
         match invoke_frontend::<AddedTask, _>(&app_handle, FRONT_ADD_PLUGIN_INSTALL_METHOD, payload).await {
             Ok(added) => Ok(Ok(added.task_id)),
             Err(err) => {
-                // 没进队列就没人会清理这份暂存文件
-                remove_staged(&staged).await;
+                // 没进队列就没人会清理这份暂存文件：插件给的文件放回原处，给的内容直接删掉
+                match from_plugin_file {
+                    Some(file) => restore_staged(&file, &plugin_root).await,
+                    None => remove_staged(&staged).await,
+                }
                 log::warn!("[plugin:{plugin_name}] the frontend refused the install task: {err}");
                 Ok(Err(err.to_string()))
             }
