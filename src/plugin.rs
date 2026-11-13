@@ -136,6 +136,8 @@ pub struct PluginRegisterState {
     permission_grants: StdMutex<HashMap<String, Instant>>,
     /// 插件导出了 `astrobox:psys-plugin-v4/canopusconnect`（每次启动由 driver 判定）。
     canopus_export: AtomicBool,
+    /// 插件导出了 `astrobox:psys-plugin-v4/resource-install`（每次启动由 driver 判定）。
+    resource_export: AtomicBool,
     providers: Mutex<Vec<ProviderRegistration>>,
     cards: Mutex<Vec<CardRegistration>>,
     deeplink_registered: Mutex<bool>,
@@ -194,6 +196,14 @@ impl PluginRegisterState {
 
     pub fn has_canopus_export(&self) -> bool {
         self.canopus_export.load(Ordering::Acquire)
+    }
+
+    pub fn set_resource_export(&self, exported: bool) {
+        self.resource_export.store(exported, Ordering::Release);
+    }
+
+    pub fn has_resource_export(&self) -> bool {
+        self.resource_export.load(Ordering::Acquire)
     }
 
     /// 一次批准有效这么久：导入一首歌要发上千条消息，每条都绕一圈前端询问会把传输速度压在
@@ -298,6 +308,7 @@ impl PluginRegisterState {
         self.transport_recv.lock().await.clear();
         self.interconnect_recv.lock().await.clear();
         self.canopus_export.store(false, Ordering::Release);
+        self.resource_export.store(false, Ordering::Release);
         // 设备那边的监听按插件计数，插件停了就要放掉；不等设备应答，免得拖慢停止。
         let listens = std::mem::take(&mut *self.canopus_listen.lock().await);
         if !listens.is_empty() {
@@ -1518,6 +1529,44 @@ impl PluginRuntime {
             payload: crate::v4::host::canopusconnect::from_core(payload),
         })
         .await
+    }
+
+    /// 插件是否接管资源安装（导出了 `resource` 接口）。只有 Level 4 插件可能有。
+    pub fn has_resource_install_handler(&self) -> bool {
+        self.v4().is_some() && self.register_state.has_resource_export()
+    }
+
+    /// 把一次「安装资源」的点击交给插件，等它给出结果。Level 2/3 插件没有这个能力。
+    pub async fn call_resource_install(
+        &self,
+        request: crate::resource_install::ResourceInstallRequest,
+    ) -> Result<crate::resource_install::ResourceInstallOutcome> {
+        let Some(v4) = self.v4() else {
+            return Err(anyhow::anyhow!(
+                "Plugin '{}' is not an api level 4 plugin",
+                self.name
+            ));
+        };
+        if !self.register_state.has_resource_export() {
+            return Err(anyhow::anyhow!(
+                "Plugin '{}' does not export astrobox:psys-plugin-v4/resource-install",
+                self.name
+            ));
+        }
+        let (reply, response) = tokio::sync::oneshot::channel();
+        v4.send(crate::v4::runtime::V4Command::ResourceInstall { request, reply })
+            .await?;
+        match tokio::time::timeout(crate::resource_install::INSTALL_TIMEOUT, response).await {
+            Ok(Ok(result)) => result.map_err(|err| anyhow::anyhow!(err)),
+            Ok(Err(_)) => Err(anyhow::anyhow!(
+                "Plugin '{}' stopped before answering the install request",
+                self.name
+            )),
+            Err(_) => Err(anyhow::anyhow!(
+                "Plugin '{}' did not answer the install request in time",
+                self.name
+            )),
+        }
     }
 
     pub async fn matches_transport(

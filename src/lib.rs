@@ -124,6 +124,7 @@ pub mod manager;
 pub mod manifest;
 pub mod plugin;
 pub mod provider_action_bridge;
+pub mod resource_install;
 mod transport_runtime;
 mod v4;
 

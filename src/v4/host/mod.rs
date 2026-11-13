@@ -14,6 +14,7 @@ pub(crate) mod event;
 pub(crate) mod http_server;
 pub(crate) mod i18n;
 pub(crate) mod interconnect;
+pub(crate) mod mass;
 pub(crate) mod notification;
 pub(crate) mod os;
 pub(crate) mod provider_callback;

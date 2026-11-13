@@ -38,6 +38,7 @@ use crate::plugin::PluginRegisterState;
 use crate::v4::bindings::PsysWorldV4;
 use crate::v4::bindings_canopusconnect::PsysPluginCanopusconnectExport;
 use crate::v4::bindings_http::PsysPluginHttpExport;
+use crate::v4::bindings_resource_install::PsysPluginResourceInstallExport;
 use crate::v4::http_server::{HttpDispatch, HttpServerRegistry};
 use crate::v4::bindings::astrobox::psys_host_v4::ui as ui_bindings;
 use crate::v4::bindings::exports::astrobox::psys_plugin_v4::event as plugin_event;
@@ -228,6 +229,11 @@ pub(crate) enum V4Command {
         addr: String,
         module: String,
         payload: crate::v4::bindings::astrobox::psys_host_v4::canopusconnect::Payload,
+    },
+    /// 资源「下载/安装」按钮被这个插件接管：交给插件的 `on-install`，结果经 `reply` 送回。
+    ResourceInstall {
+        request: crate::resource_install::ResourceInstallRequest,
+        reply: oneshot::Sender<Result<crate::resource_install::ResourceInstallOutcome, String>>,
     },
 }
 
@@ -432,6 +438,13 @@ impl PluginRuntimeV4 {
             };
             register_state.set_canopus_export(canopus_export.is_some());
 
+            // 资源安装处理导出：没有就是 None，前端调用时拿到明确的「插件不支持」。
+            let resource_export = match PsysPluginResourceInstallExport::new(&mut store, &instance) {
+                Ok(export) => Some(export),
+                Err(_) => None,
+            };
+            register_state.set_resource_export(resource_export.is_some());
+
             let result = store
                 .run_concurrent(async |accessor| {
                     // on-load 是 async func，可以直接 await 宿主接口，不必再 block_on。
@@ -454,6 +467,9 @@ impl PluginRuntimeV4 {
                     let canopus = canopus_export
                         .as_ref()
                         .map(|export| export.astrobox_psys_plugin_v4_canopusconnect());
+                    let resource = resource_export
+                        .as_ref()
+                        .map(|export| export.astrobox_psys_plugin_v4_resource_install());
                     let mut in_flight = FuturesUnordered::new();
 
                     loop {
@@ -461,7 +477,7 @@ impl PluginRuntimeV4 {
                             command = cmd_rx.recv() => {
                                 let Some(command) = command else { break };
                                 in_flight.push(Either::Left(
-                                    dispatch(&plugin_name, events, canopus, accessor, command),
+                                    dispatch(&plugin_name, events, canopus, resource, accessor, command),
                                 ));
                             }
                             request = http_rx.recv() => {
@@ -585,6 +601,7 @@ async fn dispatch(
     plugin_name: &str,
     events: &plugin_event::Guest,
     canopus: Option<&crate::v4::bindings_canopusconnect::exports::astrobox::psys_plugin_v4::canopusconnect::Guest>,
+    resource: Option<&crate::v4::bindings_resource_install::exports::astrobox::psys_plugin_v4::resource_install::Guest>,
     accessor: &wasmtime::component::Accessor<PluginCtxV4>,
     command: V4Command,
 ) {
@@ -621,6 +638,22 @@ async fn dispatch(
                 Ok(())
             }
         },
+        V4Command::ResourceInstall { request, reply } => {
+            // 结果要回给等着的前端，不走下面「只记日志」的通用收尾。
+            let outcome = match resource {
+                Some(resource) => resource
+                    .call_on_install(accessor, request.into())
+                    .await
+                    .map(Into::into)
+                    .map_err(|err| {
+                        log::error!("[plugin:{plugin_name}] resource install handler failed: {err}");
+                        err.to_string()
+                    }),
+                None => Err("plugin does not export astrobox:psys-plugin-v4/resource-install".to_string()),
+            };
+            let _ = reply.send(outcome);
+            return;
+        }
     };
 
     if let Err(err) = result {

@@ -12,6 +12,7 @@
 pub(crate) mod bindings;
 pub(crate) mod bindings_canopusconnect;
 pub(crate) mod bindings_http;
+pub(crate) mod bindings_resource_install;
 pub(crate) mod ctx;
 pub(crate) mod engine;
 pub(crate) mod host;

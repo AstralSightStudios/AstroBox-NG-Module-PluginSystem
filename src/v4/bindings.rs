@@ -75,6 +75,11 @@ wasmtime_v4::component::bindgen!({
         "astrobox:psys-host-v4/canopusconnect.listen": async | store | trappable,
         "astrobox:psys-host-v4/canopusconnect.unlisten": async | store | trappable,
 
+        "astrobox:psys-host-v4/mass.send": async | store | trappable,
+
+        "astrobox:psys-host-v4/queue.enqueue-install": async | store | trappable,
+        "astrobox:psys-host-v4/queue.cancel-task": async | store | trappable,
+
         "astrobox:psys-host-v4/os.device-id": async | store | trappable,
         "astrobox:psys-host-v4/account.get-current": async | store | trappable,
 

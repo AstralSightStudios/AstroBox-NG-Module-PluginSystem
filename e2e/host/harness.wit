@@ -1,0 +1,9 @@
+package astrobox:main;
+
+// Test-only world: the host side of exactly the interfaces this feature adds,
+// plus the export under test.
+world harness {
+  import astrobox:psys-host-v4/mass;
+  import astrobox:psys-host-v4/queue;
+  export astrobox:psys-plugin-v4/resource-install;
+}
