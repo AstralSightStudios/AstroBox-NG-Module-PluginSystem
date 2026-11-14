@@ -1,9 +1,6 @@
 use crate::bindings::astrobox::psys_host;
 use anyhow::{Error, anyhow};
-use corelib::device::xiaomi::components::{
-    resource::ResourceComponent,
-    thirdparty_app::{AppInfo, ThirdpartyAppSystem},
-};
+use corelib::device::xiaomi::components::thirdparty_app::{AppInfo, ThirdpartyAppSystem};
 use log::error;
 use serde_json::json;
 use wasmtime::component::{Accessor, FutureReader};
@@ -63,33 +60,8 @@ pub(crate) async fn send_qaic_message_impl(
     pkg_name: String,
     payload: Vec<u8>,
 ) -> Result<(), Error> {
-    let app_info = resolve_app_info(&device_addr, &pkg_name).await?;
+    let app_info = super::thirdpartyapp::resolve_quick_app(&device_addr, &pkg_name).await?;
     dispatch_message(device_addr, app_info, payload).await
-}
-
-async fn resolve_app_info(device_addr: &str, pkg_name: &str) -> Result<AppInfo, Error> {
-    let device_addr = device_addr.to_string();
-    let pkg_name = pkg_name.to_string();
-    corelib::ecs::with_rt_mut(move |rt| -> Result<AppInfo, Error> {
-        let entity = rt
-            .device_entity(&device_addr)
-            .ok_or_else(|| anyhow!("Device not found: {}", device_addr))?;
-        let resource_comp = rt
-            .world()
-            .get::<ResourceComponent>(entity)
-            .ok_or_else(|| anyhow!("Resource component unavailable: {}", device_addr))?;
-
-        resource_comp
-            .quick_apps
-            .iter()
-            .find(|item| item.package_name == pkg_name)
-            .map(|item| AppInfo {
-                package_name: item.package_name.clone(),
-                fingerprint: item.fingerprint.clone(),
-            })
-            .ok_or_else(|| anyhow!("Quick app {} not found on {}", pkg_name, device_addr))
-    })
-    .await
 }
 
 async fn dispatch_message(

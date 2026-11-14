@@ -10,6 +10,12 @@ use wasmtime::component::{Accessor, FutureReader};
 
 use super::{HostString, HostVec, PluginCtx, permission::check_permission_declared};
 
+/// 向设备要快应用列表的等待上限。以前没有上限：手环刚重启、应用服务还没起来时这条请求会石沉大海，
+/// 调用方一直挂到设备实体被替换（手动断开重连）才以 RecvError 结束。
+const QUICK_APP_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
+/// 按包名找快应用、缓存里没有时现取一次列表的等待上限（发互联消息、启动快应用的路径上）。
+const QUICK_APP_LOOKUP_REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
 impl psys_host::thirdpartyapp::Host for PluginCtx {}
 
 impl psys_host::thirdpartyapp::HostWithStore for PluginCtx {
@@ -172,11 +178,87 @@ pub(crate) async fn get_thirdparty_app_list_raw(
     })
     .await?;
 
-    let list = rx
-        .await
-        .map_err(|err| anyhow!("Quick app list response not received: {err:?}"))??;
+    await_quick_app_list(rx, QUICK_APP_LIST_TIMEOUT).await
+}
 
-    Ok(list)
+async fn await_quick_app_list(
+    rx: tokio::sync::oneshot::Receiver<anyhow::Result<Vec<pb::xiaomi::protocol::AppItem>>>,
+    timeout: std::time::Duration,
+) -> Result<Vec<pb::xiaomi::protocol::AppItem>, Error> {
+    // 超时丢掉接收端即可：RequestSlot 会把已关闭的等待方剔掉，下一次请求会重新向设备要。
+    tokio::time::timeout(timeout, rx)
+        .await
+        .map_err(|_| anyhow!("Quick app list response timed out after {}s", timeout.as_secs()))?
+        .map_err(|err| anyhow!("Quick app list response not received: {err:?}"))?
+}
+
+/// 按包名找设备上的快应用，拿到发消息、启动所需的指纹。
+///
+/// 先查设备组件里缓存的列表；没有就现向设备要一次再查。缓存只在有人取过列表时才填：
+/// 每次（重新）连接都是新的设备实体、缓存是空的，手环重启后自动回连时如果第一次取列表恰好
+/// 没回（应用服务还没起来），插件之后发的每条互联消息都会报「Quick app … not found」，
+/// 直到用户手动断开重连。同时并发的几次查找共用同一条列表请求（RequestSlot 去重）。
+pub(crate) async fn resolve_quick_app(
+    device_addr: &str,
+    package_name: &str,
+) -> Result<AppInfo, Error> {
+    if let Some(info) = find_cached_quick_app(device_addr, package_name).await? {
+        return Ok(info);
+    }
+
+    let addr = device_addr.to_string();
+    let rx = corelib::ecs::with_rt_mut(move |rt| -> Result<_, Error> {
+        rt.with_device_mut(&addr, |world, entity| {
+            let mut system = world
+                .get_mut::<ResourceSystem>(entity)
+                .ok_or_else(|| anyhow!("Resource system not found on {}", addr))?;
+            Ok::<_, Error>(system.request_quick_app_list())
+        })
+        .ok_or_else(|| anyhow!("Device not found: {}", addr))?
+    })
+    .await?;
+    let list = await_quick_app_list(rx, QUICK_APP_LOOKUP_REFRESH_TIMEOUT)
+        .await
+        .map_err(|err| {
+            anyhow!(
+                "Quick app {} not found on {} (refreshing the app list failed: {err})",
+                package_name,
+                device_addr
+            )
+        })?;
+    list.iter()
+        .find(|item| item.package_name == package_name)
+        .map(|item| AppInfo {
+            package_name: item.package_name.clone(),
+            fingerprint: item.fingerprint.clone(),
+        })
+        .ok_or_else(|| anyhow!("Quick app {} not found on {}", package_name, device_addr))
+}
+
+async fn find_cached_quick_app(
+    device_addr: &str,
+    package_name: &str,
+) -> Result<Option<AppInfo>, Error> {
+    let device_addr = device_addr.to_string();
+    let package_name = package_name.to_string();
+    corelib::ecs::with_rt_mut(move |rt| {
+        let entity = rt
+            .device_entity(&device_addr)
+            .ok_or_else(|| anyhow!("Device not found: {}", device_addr))?;
+        let resource_comp = rt
+            .world()
+            .get::<ResourceComponent>(entity)
+            .ok_or_else(|| anyhow!("Resource component unavailable: {}", device_addr))?;
+        Ok(resource_comp
+            .quick_apps
+            .iter()
+            .find(|item| item.package_name == package_name)
+            .map(|item| AppInfo {
+                package_name: item.package_name.clone(),
+                fingerprint: item.fingerprint.clone(),
+            }))
+    })
+    .await
 }
 
 async fn normalize_app_info(
@@ -195,35 +277,7 @@ async fn normalize_app_info(
         });
     }
 
-    resolve_app_info_from_component(device_addr, &package_name).await
-}
-
-async fn resolve_app_info_from_component(
-    device_addr: &str,
-    package_name: &str,
-) -> Result<AppInfo, Error> {
-    let device_addr = device_addr.to_string();
-    let package_name = package_name.to_string();
-    corelib::ecs::with_rt_mut(move |rt| {
-        let entity = rt
-            .device_entity(&device_addr)
-            .ok_or_else(|| anyhow!("Device not found: {}", device_addr))?;
-        let resource_comp = rt
-            .world()
-            .get::<ResourceComponent>(entity)
-            .ok_or_else(|| anyhow!("Resource component unavailable: {}", device_addr))?;
-
-        resource_comp
-            .quick_apps
-            .iter()
-            .find(|item| item.package_name == package_name)
-            .map(|item| AppInfo {
-                package_name: item.package_name.clone(),
-                fingerprint: item.fingerprint.clone(),
-            })
-            .ok_or_else(|| anyhow!("Quick app {} not found on {}", package_name, device_addr))
-    })
-    .await
+    resolve_quick_app(device_addr, &package_name).await
 }
 
 pub(crate) fn fingerprint_to_bytes(fingerprint: HostVec<u32>) -> Result<Vec<u8>, Error> {
