@@ -20,6 +20,7 @@ use wasmtime_wasi_v4::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::plugin::PluginRegisterState;
 use crate::v4::http_server::{HttpDispatch, HttpServerRegistry};
+use crate::v4::websocket::{WebSocketRegistry, WsDispatch};
 use tokio::sync::mpsc;
 
 pub struct PluginCtxV4 {
@@ -35,6 +36,8 @@ pub struct PluginCtxV4 {
     store_limits: StoreLimits,
     http_servers: Arc<HttpServerRegistry>,
     http_dispatch_tx: mpsc::UnboundedSender<HttpDispatch>,
+    websockets: Arc<WebSocketRegistry>,
+    ws_dispatch_tx: mpsc::UnboundedSender<WsDispatch>,
 }
 
 impl PluginCtxV4 {
@@ -48,6 +51,8 @@ impl PluginCtxV4 {
         runtime_generation: u64,
         http_servers: Arc<HttpServerRegistry>,
         http_dispatch_tx: mpsc::UnboundedSender<HttpDispatch>,
+        websockets: Arc<WebSocketRegistry>,
+        ws_dispatch_tx: mpsc::UnboundedSender<WsDispatch>,
     ) -> Self {
         Self {
             table: ResourceTable::new(),
@@ -68,7 +73,17 @@ impl PluginCtxV4 {
                 .build(),
             http_servers,
             http_dispatch_tx,
+            websockets,
+            ws_dispatch_tx,
         }
+    }
+
+    pub(crate) fn websockets(&self) -> Arc<WebSocketRegistry> {
+        Arc::clone(&self.websockets)
+    }
+
+    pub(crate) fn ws_dispatch_tx(&self) -> mpsc::UnboundedSender<WsDispatch> {
+        self.ws_dispatch_tx.clone()
     }
 
     pub(crate) fn http_servers(&self) -> Arc<HttpServerRegistry> {

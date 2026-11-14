@@ -16,6 +16,8 @@ tokio = { version = "1", features = [
     "sync",
     "fs",
     "time",
+    "net",
+    "io-util",
 ] }
 futures-util = "0.3"
 zip = "6.0"
@@ -70,6 +72,14 @@ wasmtime-wasi-http-v4 = { package = "wasmtime-wasi-http", version = "48.0.2", fe
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-graceful", "http1"] }
 http-body-util = "0.1"
+
+# Level 4 插件的 WebSocket 客户端：连接由宿主建立并持有。TCP/TLS 自己接，tungstenite 只管
+# 握手与分帧；TLS 和应用其它地方一致，rustls + ring + webpki 根证书（关掉默认特性，免得把
+# aws-lc-rs 带进移动端交叉编译）。
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"
 
 tauri = { version = "2.11.3", default-features = false, features = ["rustls-tls"] }
 tauri-plugin-clipboard-manager = "2.3.2"

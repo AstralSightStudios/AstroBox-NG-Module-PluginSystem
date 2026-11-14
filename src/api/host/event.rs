@@ -2,6 +2,20 @@ use crate::bindings::astrobox::psys_host;
 
 use super::{HostString, PluginCtx};
 
+/// 宿主自己发给插件的插件消息（队列任务回报、传输进度、WebSocket 推送……）。
+///
+/// 比插件之间广播的消息多一个 `"host": true`。广播的外层 JSON 由宿主拼，插件只能决定
+/// eventName 和 payload，造不出这个字段，所以插件可以靠它分辨消息是不是真的来自宿主，
+/// 不会被别的插件用同名事件冒充。
+pub(crate) fn host_plugin_message(event_name: &str, payload: &str) -> String {
+    serde_json::json!({
+        "eventName": event_name,
+        "payload": payload,
+        "host": true,
+    })
+    .to_string()
+}
+
 /// 把插件发出的事件广播给其它已加载插件。
 ///
 /// 与 API Level 无关：投递走 `PluginRuntime::dispatch_plugin_message`，由它按目标

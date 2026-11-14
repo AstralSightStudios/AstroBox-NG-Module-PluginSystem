@@ -80,6 +80,11 @@ wasmtime_v4::component::bindgen!({
         "astrobox:psys-host-v4/queue.enqueue-install": async | store | trappable,
         "astrobox:psys-host-v4/queue.cancel-task": async | store | trappable,
 
+        "astrobox:psys-host-v4/websocket.connect": async | store | trappable,
+        "astrobox:psys-host-v4/websocket.send": async | store | trappable,
+        "astrobox:psys-host-v4/websocket.receive": async | store | trappable,
+        "astrobox:psys-host-v4/websocket.close": async | store | trappable,
+
         "astrobox:psys-host-v4/os.device-id": async | store | trappable,
         "astrobox:psys-host-v4/account.get-current": async | store | trappable,
 

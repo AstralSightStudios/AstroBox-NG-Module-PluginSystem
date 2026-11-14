@@ -371,11 +371,10 @@ async fn send_payload(
 
 async fn forward_progress(plugin: String, generation: u64, event: String, mut rx: mpsc::UnboundedReceiver<f64>) {
     while let Some(ratio) = rx.recv().await {
-        let message = json!({
-            "eventName": event,
-            "payload": json!({ "progress": ratio }).to_string(),
-        })
-        .to_string();
+        let message = crate::api::host::event::host_plugin_message(
+            &event,
+            &json!({ "progress": ratio }).to_string(),
+        );
         deliver_plugin_message(&plugin, generation, message).await;
     }
 }

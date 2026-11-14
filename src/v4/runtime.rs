@@ -40,6 +40,7 @@ use crate::v4::bindings_canopusconnect::PsysPluginCanopusconnectExport;
 use crate::v4::bindings_http::PsysPluginHttpExport;
 use crate::v4::bindings_resource_install::PsysPluginResourceInstallExport;
 use crate::v4::http_server::{HttpDispatch, HttpServerRegistry};
+use crate::v4::websocket::{WebSocketRegistry, WsDispatch};
 use crate::v4::bindings::astrobox::psys_host_v4::ui as ui_bindings;
 use crate::v4::bindings::exports::astrobox::psys_plugin_v4::event as plugin_event;
 use crate::v4::ctx::PluginCtxV4;
@@ -253,6 +254,7 @@ pub(crate) struct PluginRuntimeV4 {
     _epoch_owner: Arc<()>,
     driver: Mutex<Option<DriverHandle>>,
     http_servers: Arc<HttpServerRegistry>,
+    websockets: Arc<WebSocketRegistry>,
 }
 
 impl PluginRuntimeV4 {
@@ -291,6 +293,7 @@ impl PluginRuntimeV4 {
             _epoch_owner: epoch_owner,
             driver: Mutex::new(None),
             http_servers: Arc::new(HttpServerRegistry::new()),
+            websockets: Arc::new(WebSocketRegistry::new()),
         })
     }
 
@@ -350,6 +353,7 @@ impl PluginRuntimeV4 {
         &self,
         generation: u64,
         http_dispatch_tx: mpsc::UnboundedSender<HttpDispatch>,
+        ws_dispatch_tx: mpsc::UnboundedSender<WsDispatch>,
     ) -> Result<Store<PluginCtxV4>> {
         let wasi_ctx = self.build_wasi_ctx()?;
         let mut store = Store::new(
@@ -364,6 +368,8 @@ impl PluginRuntimeV4 {
                 generation,
                 Arc::clone(&self.http_servers),
                 http_dispatch_tx,
+                Arc::clone(&self.websockets),
+                ws_dispatch_tx,
             ),
         );
         store.limiter(|ctx| ctx.store_limits());
@@ -381,7 +387,10 @@ impl PluginRuntimeV4 {
 
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<V4Command>();
         let (http_tx, mut http_rx) = mpsc::unbounded_channel::<HttpDispatch>();
-        let mut store = self.create_store(generation, http_tx)?;
+        // 推送方式的 WebSocket 消息。通道跟着这一次 run 走：插件换代后旧连接的读任务
+        // 送不进来，只能等 `close_all` 收拾。
+        let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<WsDispatch>();
+        let mut store = self.create_store(generation, http_tx, ws_tx)?;
         let linker = self.build_linker()?;
         let component = self.component.clone();
         let plugin_name = self.name.clone();
@@ -483,9 +492,9 @@ impl PluginRuntimeV4 {
                             request = http_rx.recv() => {
                                 let Some(request) = request else { continue };
                                 match http {
-                                    Some(http) => in_flight.push(Either::Right(
+                                    Some(http) => in_flight.push(Either::Right(Either::Left(
                                         dispatch_http(&plugin_name, http, accessor, request),
-                                    )),
+                                    ))),
                                     None => {
                                         let _ = request.reply.send(Err(
                                             "plugin does not export astrobox:psys-plugin-v4/http"
@@ -493,6 +502,13 @@ impl PluginRuntimeV4 {
                                         ));
                                     }
                                 }
+                            }
+                            message = ws_rx.recv() => {
+                                // 发送端在 Store 里，driver 活着它就不会关。
+                                let Some(message) = message else { continue };
+                                in_flight.push(Either::Right(Either::Right(
+                                    dispatch_ws(&plugin_name, events, accessor, message),
+                                )));
                             }
                             // 只在有在途调用时才 poll，否则 FuturesUnordered 会立刻
                             // 返回 None 把这里变成忙等。
@@ -531,7 +547,8 @@ impl PluginRuntimeV4 {
     }
 
     pub(crate) async fn stop(&self) {
-        // 先停监听，避免插件都停了端口还开着、请求进来打到已经没了的 driver。
+        // 先停监听、断开连接，避免插件都停了端口还开着、消息还往已经没了的 driver 里送。
+        self.websockets.close_all();
         self.http_servers.stop_all().await;
 
         let handle = {
@@ -594,6 +611,24 @@ async fn dispatch_http(
             err.to_string()
         });
     let _ = reply.send(result);
+}
+
+/// 推送方式的一条 WebSocket 消息：作为插件消息交给 `on-event`，处理完再放读任务去读下一条。
+/// 回调失败也要放行，否则这个连接就再也不读了。
+async fn dispatch_ws(
+    plugin_name: &str,
+    events: &plugin_event::Guest,
+    accessor: &wasmtime::component::Accessor<PluginCtxV4>,
+    dispatch: WsDispatch,
+) {
+    let WsDispatch { message, done } = dispatch;
+    if let Err(err) = events
+        .call_on_event(accessor, plugin_event::EventType::PluginMessage, message)
+        .await
+    {
+        log::error!("[plugin:{plugin_name}] websocket message handler failed: {err}");
+    }
+    let _ = done.send(());
 }
 
 /// 执行一条命令；错误只记日志，不能让 driver 退出。

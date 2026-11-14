@@ -25,3 +25,4 @@ pub(crate) mod timer;
 pub(crate) mod transport;
 pub(crate) mod ui;
 pub(crate) mod watchface;
+pub(crate) mod websocket;

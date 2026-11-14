@@ -20,3 +20,4 @@ pub(crate) mod http_server;
 pub(crate) mod identity;
 pub(crate) mod runtime;
 pub(crate) mod stdio;
+pub(crate) mod websocket;
