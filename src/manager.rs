@@ -718,56 +718,45 @@ impl PluginManager {
         }
     }
 
-    pub async fn dispatch_interconnect_message(
-        &mut self,
-        addr: &str,
-        pkg_name: &str,
-        payload: String,
-    ) {
-        let mut active_plugins = self
+    /// 已加载且未停用的插件（按名字排序）。
+    pub fn active_runtimes(&self) -> Vec<(String, crate::plugin::PluginRuntime)> {
+        let mut active = self
             .plugins
             .iter()
             .filter(|(_, plugin)| plugin.state.loaded && !plugin.state.disabled)
             .map(|(name, plugin)| (name.clone(), plugin.runtime.clone()))
             .collect::<Vec<_>>();
-        active_plugins.sort_by(|left, right| left.0.cmp(&right.0));
+        active.sort_by(|left, right| left.0.cmp(&right.0));
+        active
+    }
 
+    /// 监听了这台设备上这个快应用的插件。投递本身不在这里做——插件处理一条消息可能要等完
+    /// 一次 HTTP 请求，不能占着管理器的命令队列（见 `interconnect_link`）。
+    pub async fn interconnect_receivers(
+        &self,
+        addr: &str,
+        pkg_name: &str,
+    ) -> Vec<(String, crate::plugin::PluginRuntime)> {
         let mut matched = Vec::new();
-        for (name, runtime) in active_plugins {
+        for (name, runtime) in self.active_runtimes() {
             if runtime.matches_interconnect(addr, pkg_name).await {
                 matched.push((name, runtime));
             }
         }
+        matched
+    }
 
-        if matched.is_empty() {
-            return;
-        }
-
-        log::debug!(
-            "[pluginsystem] interconnect dispatch addr={} pkg={} -> {} receiver(s)",
-            addr,
-            pkg_name,
-            matched.len()
-        );
-
-        let mut handles = Vec::with_capacity(matched.len());
-        for (name, runtime) in matched {
-            let payload = payload.clone();
-            handles.push(tokio::spawn(async move {
-                if let Err(err) = runtime.dispatch_interconnect_message(payload).await {
-                    log::error!(
-                        "[plugin:{}] Failed to deliver interconnect message: {err}",
-                        name
-                    );
+    /// 每个插件在这台设备上监听的快应用包名（去重）。
+    pub async fn interconnect_packages_for(&self, addr: &str) -> Vec<String> {
+        let mut packages = Vec::new();
+        for (_, runtime) in self.active_runtimes() {
+            for pkg in runtime.interconnect_packages_for(addr).await {
+                if !packages.contains(&pkg) {
+                    packages.push(pkg);
                 }
-            }));
-        }
-
-        for handle in join_all(handles).await {
-            if let Err(err) = handle {
-                log::error!("[pluginsystem] interconnect dispatch task panicked: {err}");
             }
         }
+        packages
     }
 
     /// 设备上的 Canopus 模块发来一条消息：交给监听了该设备该模块的 Level 4 插件。

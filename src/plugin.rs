@@ -163,13 +163,20 @@ impl PluginRegisterState {
         }
     }
 
-    pub async fn register_interconnect_recv(&self, registration: InterconnectRecvRegistration) {
+    /// 登记一条 Interconnect 监听；已有同样的则返回 false。
+    pub async fn register_interconnect_recv(
+        &self,
+        registration: InterconnectRecvRegistration,
+    ) -> bool {
         let mut guard = self.interconnect_recv.lock().await;
-        if !guard.iter().any(|existing| {
-            existing.addr == registration.addr && existing.pkg_name == registration.pkg_name
+        if guard.iter().any(|existing| {
+            existing.pkg_name == registration.pkg_name
+                && crate::interconnect_link::same_device_addr(&existing.addr, &registration.addr)
         }) {
-            guard.push(registration);
+            return false;
         }
+        guard.push(registration);
+        true
     }
 
     /// 登记一条监听；已有则返回 false。
@@ -1496,11 +1503,27 @@ impl PluginRuntime {
             .await
     }
 
+    /// 空地址的登记匹配任意设备：插件在没有设备连着的时候（比如 AB 刚启动、自动回连还没完成）
+    /// 只能这么登记，以前按地址精确比较，这种登记永远收不到消息。
     pub async fn matches_interconnect(&self, addr: &str, pkg_name: &str) -> bool {
+        let registrations = self.register_state.interconnect_recv.lock().await;
+        registrations.iter().any(|reg| {
+            reg.pkg_name == pkg_name
+                && (reg.addr.is_empty()
+                    || crate::interconnect_link::same_device_addr(&reg.addr, addr))
+        })
+    }
+
+    /// 这个插件在某台设备上监听的快应用包名（含空地址的通配登记）。
+    pub async fn interconnect_packages_for(&self, addr: &str) -> Vec<String> {
         let registrations = self.register_state.interconnect_recv.lock().await;
         registrations
             .iter()
-            .any(|reg| reg.addr == addr && reg.pkg_name == pkg_name)
+            .filter(|reg| {
+                reg.addr.is_empty() || crate::interconnect_link::same_device_addr(&reg.addr, addr)
+            })
+            .map(|reg| reg.pkg_name.clone())
+            .collect()
     }
 
     pub async fn matches_canopus_connect(&self, addr: &str, module: &str) -> bool {

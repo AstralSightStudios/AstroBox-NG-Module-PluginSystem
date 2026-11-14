@@ -101,9 +101,15 @@ impl psys_host::register::HostWithStore for PluginCtx {
                     return Ok(Err(()));
                 }
 
-                register_state
-                    .register_interconnect_recv(InterconnectRecvRegistration { addr, pkg_name })
-                    .await;
+                if register_state
+                    .register_interconnect_recv(InterconnectRecvRegistration {
+                        addr: addr.clone(),
+                        pkg_name: pkg_name.clone(),
+                    })
+                    .await
+                {
+                    crate::interconnect_link::on_listener_added(addr, pkg_name);
+                }
                 Ok::<core::result::Result<(), ()>, Error>(Ok(()))
             })
         });

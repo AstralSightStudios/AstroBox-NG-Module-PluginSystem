@@ -107,9 +107,15 @@ impl register::HostWithStore<PluginCtxV4> for PluginCtxV4 {
             return Ok(Err("permission denied".to_string()));
         }
 
-        register_state
-            .register_interconnect_recv(InterconnectRecvRegistration { addr, pkg_name })
-            .await;
+        if register_state
+            .register_interconnect_recv(InterconnectRecvRegistration {
+                addr: addr.clone(),
+                pkg_name: pkg_name.clone(),
+            })
+            .await
+        {
+            crate::interconnect_link::on_listener_added(addr, pkg_name);
+        }
         Ok(Ok(()))
     }
 

@@ -120,6 +120,7 @@ pub mod bindings_v3 {
         }
     });
 }
+pub mod interconnect_link;
 pub mod manager;
 pub mod manifest;
 pub mod plugin;
